@@ -1,0 +1,257 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+
+Visualization Manager:
+  Global Options:
+    Fixed Frame: map
+    Frame Rate: 30
+    Background Color: 30; 30; 30
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic: /goal_pose
+
+  Displays:
+    # ── Robot ──────────────────────────────────────────────────────
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: true
+      Description Topic: /robot_description
+      Alpha: 1.0
+
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+      Show Names: true
+      Show Axes: true
+
+    # ── SLAM Map ───────────────────────────────────────────────────
+    - Class: rviz_default_plugins/Map
+      Name: SLAM Map
+      Topic:
+        Value: /map
+        Depth: 1
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Enabled: true
+      Color Scheme: map
+      Alpha: 0.9
+
+    # ── Global Costmap ─────────────────────────────────────────────
+    - Class: rviz_default_plugins/Map
+      Name: Global Costmap
+      Topic:
+        Value: /global_costmap/costmap
+        Depth: 1
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Enabled: false
+      Color Scheme: costmap
+      Alpha: 0.45
+
+    # ── Local Costmap ──────────────────────────────────────────────
+    - Class: rviz_default_plugins/Map
+      Name: Local Costmap
+      Topic:
+        Value: /local_costmap/costmap
+        Depth: 1
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+      Enabled: true
+      Color Scheme: costmap
+      Alpha: 0.55
+
+    # ── LiDAR ──────────────────────────────────────────────────────
+    - Class: rviz_default_plugins/LaserScan
+      Name: LiDAR Scan
+      Topic:
+        Value: /scan
+        Depth: 5
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+      Enabled: true
+      Size (m): 0.04
+      Color: 255; 40; 40
+      Style: Flat Squares
+
+    # ── A* Plan Path ───────────────────────────────────────────────
+    - Class: rviz_default_plugins/Path
+      Name: A* Plan
+      Topic:
+        Value: /plan
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+      Color: 0; 255; 100
+      Alpha: 1.0
+      Line Width: 0.04
+      Style: Lines
+
+    # ── A* Explored Cells (CUBE_LIST heatmap) ──────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: A* Explored
+      Topic:
+        Value: /astar_explored
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── A* Start / Goal Spheres ────────────────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: A* Markers
+      Topic:
+        Value: /astar_markers
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── DWA Candidate Trajectories (HSV scored) ────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: DWA Trajectories
+      Topic:
+        Value: /dwa_trajectories
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── DWA Best Trajectory (glowing green) ────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: DWA Best
+      Topic:
+        Value: /dwa_best_traj
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── DWA Lookahead Goal Sphere ──────────────────────────────────
+    - Class: rviz_default_plugins/Marker
+      Name: DWA Goal
+      Topic:
+        Value: /dwa_goal
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── MPPI Sampled Trajectories ──────────────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: MPPI Trajectories
+      Topic:
+        Value: /mppi_trajectories
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── Pure Pursuit Lookahead Point ───────────────────────────────
+    - Class: rviz_default_plugins/Marker
+      Name: Pure Pursuit Lookahead
+      Topic:
+        Value: /pure_pursuit_lookahead
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── Stanley Closest Point ──────────────────────────────────────
+    - Class: rviz_default_plugins/Marker
+      Name: Stanley Closest
+      Topic:
+        Value: /stanley_closest_point
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── TEB Elastic Band ───────────────────────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: TEB Band
+      Topic:
+        Value: /teb_band
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── RRT Tree Visualization ─────────────────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: RRT Tree
+      Topic:
+        Value: /rrt_tree
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── RRT Markers ────────────────────────────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: RRT Markers
+      Topic:
+        Value: /rrt_markers
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── SMAC Explored Cells ────────────────────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: SMAC Explored
+      Topic:
+        Value: /smac_explored
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── SMAC Markers ───────────────────────────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: SMAC Markers
+      Topic:
+        Value: /smac_markers
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── Theta* Explored Cells ──────────────────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Theta* Explored
+      Topic:
+        Value: /theta_star_explored
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── Theta* Markers ─────────────────────────────────────────────
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Theta* Markers
+      Topic:
+        Value: /theta_star_markers
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+
+    # ── Driven Path (orange breadcrumb) ────────────────────────────
+    - Class: rviz_default_plugins/Path
+      Name: Driven Path
+      Topic:
+        Value: /driven_path
+        Depth: 5
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+      Enabled: true
+      Color: 255; 165; 0
+      Alpha: 0.85
+      Line Width: 0.03
+      Style: Lines
