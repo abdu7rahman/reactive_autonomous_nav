@@ -152,6 +152,35 @@ Compatible with the custom **mobile manipulator** simulation (4-wheel differenti
 
 ---
 
+---
+
+## C++ Implementations
+
+The `cpp/` directory contains a separate ROS2 C++ package (`reactive_nav_cpp`) with native C++ ports of the three working components:
+
+| Component | File |
+|---|---|
+| A* global planner | `cpp/src/astar_planner.cpp` |
+| SMAC hybrid A* planner | `cpp/src/smac_planner.cpp` |
+| DWA local controller | `cpp/src/dwa_controller.cpp` |
+
+Build and run the C++ package:
+```bash
+# from your ros2_ws root — both packages build together
+colcon build --packages-select reactive_nav_cpp
+source install/setup.bash
+
+# run C++ A* planner directly
+ros2 run reactive_nav_cpp astar_planner
+
+# or C++ DWA controller
+ros2 run reactive_nav_cpp dwa_controller
+```
+
+The C++ versions are faster (~2-3x lower latency on trajectory rollout) and have zero Python GIL overhead on the control loop.
+
+---
+
 ## License
 
 MIT — Mohammed Abdul Rahman, Northeastern University Seattle
