@@ -29,23 +29,23 @@ Custom reactive autonomous navigation stack for TurtleBot4, built on ROS2 Jazzy.
 
 **Global Planners** compute a collision-free path from robot pose to goal:
 
-| Planner | Algorithm | Notes |
+| Planner | Algorithm | Status |
 |---|---|---|
-| `astar` | A* with octile heuristic | Laplacian path smoothing, RViz heat-map |
-| `theta_star` | Theta* (any-angle A*) | Line-of-sight shortcuts, smoother paths |
-| `smac` | SMAC Hybrid A* | Kinematically feasible, SE2 lattice |
-| `rrt` | RRT | Sampling-based, works in high-DOF spaces |
-| `rrt_smac_hybrid` | RRT + SMAC hybrid | RRT tree seeded into SMAC refinement |
+| `astar` | A* with octile heuristic | Working — Laplacian smoothing, RViz heat-map |
+| `smac` | SMAC Hybrid A* | Working — kinematically feasible, SE2 lattice |
+| `theta_star` | Theta* (any-angle A*) | In progress |
+| `rrt` | RRT | In progress |
+| `rrt_smac_hybrid` | RRT + SMAC hybrid | In progress |
 
 **Local Controllers** track the global plan reactively:
 
-| Controller | Algorithm | Notes |
+| Controller | Algorithm | Status |
 |---|---|---|
-| `dwa` | Dynamic Window Approach | Fully vectorized rollout, HSV trajectory viz |
-| `pure_pursuit` | Pure Pursuit | Adaptive lookahead, low compute |
-| `stanley` | Stanley | Heading + cross-track error, highway-grade |
-| `teb` | Timed Elastic Band | Time-parameterized trajectory optimization |
-| `mppi` | MPPI | Information-theoretic optimal control, GPU-friendly |
+| `dwa` | Dynamic Window Approach | Working — vectorized rollout, HSV trajectory viz |
+| `pure_pursuit` | Pure Pursuit | In progress |
+| `stanley` | Stanley | In progress |
+| `teb` | Timed Elastic Band | In progress |
+| `mppi` | MPPI | In progress |
 
 ---
 
