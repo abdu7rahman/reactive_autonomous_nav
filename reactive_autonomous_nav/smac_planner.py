@@ -67,7 +67,13 @@ def _heading_to_bin(theta):
 
 
 def _bin_to_heading(b):
-    return b * HEADING_RES - math.pi
+    """Inverse of _heading_to_bin.
+
+    Bins are laid out as round(wrap(theta) / HEADING_RES) % NUM_HEADINGS, so
+    bin 0 is heading 0. Subtracting pi here made the round trip come back
+    reversed by 180 degrees.
+    """
+    return _angle_wrap(b * HEADING_RES)
 
 
 class SmacPlannerNode(Node):
@@ -209,6 +215,40 @@ class SmacPlannerNode(Node):
         """Check if world coordinate is free using merged costmaps."""
         row, col = self._w2g(wx, wy)
         return self._is_traversable(row, col)
+
+    def _segment_free(self, x1, y1, x2, y2) -> bool:
+        """Every cell the segment enters is traversable (Amanatides-Woo).
+
+        Motion primitives are only 0.15 m long but still span three cells at
+        5 cm resolution, so checking the sampled poses alone can step over a
+        blocked cell between them.
+        """
+        res = self.global_info.resolution
+        ox, oy = self.global_origin
+        fc0, fr0 = (x1 - ox) / res, (y1 - oy) / res
+        fc1, fr1 = (x2 - ox) / res, (y2 - oy) / res
+        c, r = int(math.floor(fc0)), int(math.floor(fr0))
+        c_end, r_end = int(math.floor(fc1)), int(math.floor(fr1))
+        dc, dr = fc1 - fc0, fr1 - fr0
+        step_c = 1 if dc > 0 else (-1 if dc < 0 else 0)
+        step_r = 1 if dr > 0 else (-1 if dr < 0 else 0)
+        inf = float('inf')
+        t_max_c = ((c + (step_c > 0)) - fc0) / dc if dc else inf
+        t_max_r = ((r + (step_r > 0)) - fr0) / dr if dr else inf
+        t_step_c = abs(1.0 / dc) if dc else inf
+        t_step_r = abs(1.0 / dr) if dr else inf
+        for _ in range(2 * (abs(c_end - c) + abs(r_end - r)) + 4):
+            if not self._is_traversable(r, c):
+                return False
+            if r == r_end and c == c_end:
+                return True
+            if t_max_c < t_max_r:
+                t_max_c += t_step_c
+                c += step_c
+            else:
+                t_max_r += t_step_r
+                r += step_r
+        return False
     
     def _is_traversable(self, row, col) -> bool:
         """Check if a grid cell is traversable (merged global + local)."""
@@ -309,10 +349,16 @@ class SmacPlannerNode(Node):
         """Generate waypoints along a forward arc.
         Returns list of (x, y, theta) and the total arc length."""
         if abs(steer) < 1e-6:
-            # Straight line
-            dx = arc_len * math.cos(theta)
-            dy = arc_len * math.sin(theta)
-            pts = [(wx + dx, wy + dy, theta)]
+            # Straight line. Emit the same number of intermediate poses as a
+            # curved primitive -- returning only the endpoint left the cells
+            # crossed on the way there unchecked by the caller's collision loop.
+            step_len = arc_len / n_steps
+            pts = []
+            cx, cy = wx, wy
+            for _ in range(n_steps):
+                cx += step_len * math.cos(theta)
+                cy += step_len * math.sin(theta)
+                pts.append((cx, cy, theta))
             return pts, arc_len
 
         radius  = arc_len / steer
@@ -442,12 +488,15 @@ class SmacPlannerNode(Node):
                 arc_pts, arc_len = self._expand_arc(
                     cwx, cwy, cwt, steer, ARC_LENGTH)
 
-                # collision check along arc using merged costmap
+                # collision check along the arc, segment by segment from the
+                # current pose so nothing between sampled poses is skipped
                 blocked = False
-                for px, py, _ in arc_pts:
-                    if not self._is_free(px, py):
+                px, py = cwx, cwy
+                for ax, ay, _ in arc_pts:
+                    if not self._segment_free(px, py, ax, ay):
                         blocked = True
                         break
+                    px, py = ax, ay
                 if blocked:
                     continue
 
