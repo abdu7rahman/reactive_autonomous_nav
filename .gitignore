@@ -1,5 +1,8 @@
-__pycache__/
 *.pyc
+__pycache__/
+bench/*.bin
+bench/.pr_dwa.py
+bench/.third_party/
 bench/bench_astar
 bench/bench_dwa
-bench/*.bin
+bench/dwa_compare_cpp
