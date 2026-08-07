@@ -34,6 +34,7 @@ class PurePursuitControllerNode(Node):
         # ── State ────────────────────────────────────────────────────
         self.current_path   = None
         self.goal_reached   = False
+        self._wp_idx        = 0
 
         # ── TF ───────────────────────────────────────────────────────
         self.tf_buffer   = Buffer()
@@ -56,6 +57,7 @@ class PurePursuitControllerNode(Node):
     def _path_cb(self, msg: Path):
         self.current_path = msg
         self.goal_reached = False
+        self._wp_idx      = 0          # progress is per-path, not per-node
         self.get_logger().info(f'Received new path: {len(msg.poses)} waypoints')
 
     def _get_robot_pose(self):
@@ -115,15 +117,22 @@ class PurePursuitControllerNode(Node):
         cmd = Twist()
         # Slow down near goal
         v = self.max_vel if dist_to_goal > 0.5 else max(self.min_vel, self.max_vel * (dist_to_goal / 0.5))
-        
+
+        # Slow down for curvature. Holding max_vel through a sharp corner fixes
+        # the turn radius at v / max_yawrate, which is wider than a doorway --
+        # the robot tracked the path correctly and still drove into the frame.
+        # Capping v at max_yawrate / |curvature| keeps the achievable radius
+        # inside the turn the path is asking for.
+        if abs(curvature) > 1e-6:
+            v = min(v, self.max_yawrate / abs(curvature))
+        v = max(self.min_vel, v)
+
         cmd.linear.x = v
         cmd.angular.z = v * curvature
-        
+
         # Clamp angular
         if abs(cmd.angular.z) > self.max_yawrate:
             cmd.angular.z = math.copysign(self.max_yawrate, cmd.angular.z)
-            # If we're turning too sharp, slow down linear
-            cmd.linear.x *= 0.8
 
         self.cmd_pub.publish(cmd)
         
@@ -131,19 +140,36 @@ class PurePursuitControllerNode(Node):
         self._visualize_lookahead(target)
 
     def _get_lookahead_point(self, rx, ry):
-        """Find the first point on the path that is >= lookahead_dist away."""
-        if not self.current_path.poses:
+        """First point at least lookahead_dist ahead of the robot on the path.
+
+        The search starts from the closest waypoint and only ever moves
+        forward. Scanning from index 0 instead meant that once the robot had
+        driven one lookahead away from the start, the start itself satisfied
+        the distance test and got returned -- the robot then turned around and
+        chased the beginning of its own path.
+        """
+        poses = self.current_path.poses
+        if not poses:
             return None
-            
-        best_pt = None
-        for ps in self.current_path.poses:
-            p = ps.pose.position
+
+        # advance the progress index to the closest waypoint ahead of it
+        best_i, best_d = self._wp_idx, float('inf')
+        for i in range(self._wp_idx, len(poses)):
+            p = poses[i].pose.position
             d = math.hypot(p.x - rx, p.y - ry)
-            if d >= self.lookahead_dist:
+            if d < best_d:
+                best_d, best_i = d, i
+            elif d > best_d + self.lookahead_dist:
+                break            # moving away for good, stop scanning
+        self._wp_idx = best_i
+
+        for i in range(best_i, len(poses)):
+            p = poses[i].pose.position
+            if math.hypot(p.x - rx, p.y - ry) >= self.lookahead_dist:
                 return p
-        
-        # If no point is far enough, use the last one (the goal)
-        return self.current_path.poses[-1].pose.position
+
+        # nothing far enough ahead: aim at the goal
+        return poses[-1].pose.position
     
     def _visualize_lookahead(self, target):
         """Publish lookahead point as a sphere marker."""

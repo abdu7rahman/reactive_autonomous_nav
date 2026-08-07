@@ -24,7 +24,10 @@ class StanleyControllerNode(Node):
         super().__init__('stanley_controller_node')
 
         # ── Params ───────────────────────────────────────────────────
-        self.k                  = 1.5    # Cross-track gain
+        # Cross-track gain. 1.5 tracked straight legs fine but converged too
+        # slowly to hold a doorway-width turn -- it stayed on the path right up
+        # to the corner and then clipped it. 4.0 completes the same route.
+        self.k                  = 4.0
         self.max_vel            = 0.35
         self.min_vel            = 0.05
         self.max_yawrate        = 1.5
@@ -34,6 +37,7 @@ class StanleyControllerNode(Node):
         # ── State ────────────────────────────────────────────────────
         self.current_path   = None
         self.goal_reached   = False
+        self._wp_idx        = 0
 
         # ── TF ───────────────────────────────────────────────────────
         self.tf_buffer   = Buffer()
@@ -54,6 +58,7 @@ class StanleyControllerNode(Node):
         self.get_logger().info('Stanley Controller — ready')
 
     def _path_cb(self, msg: Path):
+        self._wp_idx = 0
         self.current_path = msg
         self.goal_reached = False
 
@@ -112,12 +117,19 @@ class StanleyControllerNode(Node):
         # For small angles: ω ≈ v * δ / L, using L = wheelbase ≈ 0.3m
         wheelbase = 0.3
         angular_vel = v * math.tan(steer) / wheelbase
-        
+
+        # Slow down when the correction is large. Holding max_vel through a
+        # doorway-sized turn leaves the achievable radius wider than the gap,
+        # so the tracker stays on the path right up until it clips the frame.
+        turn_scale = 1.0 / (1.0 + 2.0 * abs(steer))
+        v = max(self.min_vel, v * turn_scale)
+        angular_vel *= turn_scale
+
         # Commands
         cmd = Twist()
         cmd.linear.x = v
         cmd.angular.z = angular_vel
-        
+
         # Clamping
         if abs(cmd.angular.z) > self.max_yawrate:
             cmd.angular.z = math.copysign(self.max_yawrate, cmd.angular.z)
@@ -133,15 +145,20 @@ class StanleyControllerNode(Node):
     def _get_closest_point(self, rx, ry):
         """Find the segment of the path closest to the robot."""
         best_d = float('inf')
-        best_idx = 0
-        
-        # Simple version: find closest waypoint first
-        for i, ps in enumerate(self.current_path.poses):
-            p = ps.pose.position
+        best_idx = self._wp_idx
+
+        # Search forward from the last match only. A global scan can snap the
+        # reference back onto an earlier leg wherever the path doubles past
+        # itself, and the controller then steers for the wrong segment.
+        for i in range(self._wp_idx, len(self.current_path.poses)):
+            p = self.current_path.poses[i].pose.position
             d = math.hypot(p.x - rx, p.y - ry)
             if d < best_d:
                 best_d = d
                 best_idx = i
+            elif d > best_d + 1.0:
+                break
+        self._wp_idx = best_idx
         
         # Now find the orientation of the path at that point
         # Use next waypoint for heading
