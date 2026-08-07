@@ -1,81 +1,148 @@
-# Benchmarks
+# Benchmarks and tests
 
-The README claims the C++ ports are faster than the Python ones. This measures
-by how much, so the claim is a number instead of an impression.
+Two things live here: a correctness suite that every planner and controller has
+to pass, and timing comparisons against published baselines.
 
 ```bash
-./bench/run.sh
+python3 bench/test_planners.py     # correctness, ~8 min
+python3 bench/dwa_compare.py       # vs PythonRobotics DWA
+python3 bench/nav2_compare.py      # vs Nav2 Smac Planner paper
+./bench/run.sh                     # Python vs C++ latency
 ```
 
-Nothing here reimplements a planner. `bench_astar.py` and `bench_dwa.py` load
-the real modules from `reactive_autonomous_nav/` — `rclpy` and the message
-packages are stubbed just far enough for the import to succeed — and call
-`_astar` and `_score_trajectories` on a bare instance with the grid attributes
-wired up by hand. `bench_astar.cpp` and `bench_dwa.cpp` copy the search and the
-rollout out of `cpp/src/` verbatim, swapping `nav_msgs::msg::OccupancyGrid` for
-a struct with the same fields. Both languages read the same map bytes from
-`maps.bin` / `local.bin`.
+Nothing is reimplemented. `rig.py` stubs `rclpy` and the message packages just
+far enough for the modules to import, then builds each node with
+`object.__new__` and wires the grid and state attributes it reads. Parameters
+come from the node's own `__init__` by AST extraction, so a test can never
+silently drift from the shipped tuning.
 
-Measured on an Intel Xeon @ 2.10 GHz, g++ 13.3 `-O2`, Python 3.11 with
-numpy 2.4. Absolute numbers will move on other hardware; the ratios are the
-point.
+## What "passing" means
 
-## A\* global planner
+A global plan passes only if it is connected, in bounds, ends at the goal, and
+**no segment enters a blocked cell**. Checking only the waypoints is exactly
+what let a Bresenham line-of-sight return paths through walls — see below.
 
-Median of 5 runs. Maps are 8-connected costmaps with a verified-reachable
-start and goal.
+A controller passes only if driving its own `_control_loop` around a unicycle
+plant reaches the goal without touching a lethal cell.
 
-| Map | Python | C++ | Speedup | Nodes expanded, Python | C++ |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 128 × 128 | 7.50 ms | 0.046 ms | **163×** | 500 | 421 |
-| 256 × 256 | 110.26 ms | 1.115 ms | **99×** | 8,186 | 4,814 |
-| 384 × 384 | 884.21 ms | 4.598 ms | **192×** | 61,631 | 21,015 |
+Maps are chosen so a straight start-to-goal line is always blocked, which
+catches a planner that quietly returns the trivial path instead of flattering
+it.
 
-Two things are happening at once, and it is worth separating them.
+## Bugs this found
 
-The expansion counts diverge because the C++ port added a closed set. The
-Python `_astar` pushes a node whenever it finds a cheaper `g`, and re-pops it
-later — on the 384 × 384 map it expands 2.9× the nodes C++ does. That is an
-algorithmic difference, not a language one, and it means the honest reading of
-these rows is roughly 3× from the closed set and the rest from the language.
+Every one of these was live before the suite existed.
 
-The remaining gap is what a `heapq` of Python tuples costs against a
-`priority_queue` of PODs. It grows with map size because the Python version's
-per-node overhead is constant while its node count grows faster.
+| Component | Bug | Effect |
+| --- | --- | --- |
+| Theta\* | Bresenham line-of-sight walks a *thin* line and skips cells the segment enters | Returned paths **straight through walls**. 13 of 18 segments on a maze were invalid |
+| RRT | `_is_free` used `v < LETHAL_COST` with no lower bound | `OccupancyGrid.data` is int8, so cost 254 arrives as −2 and **every wall read as free** |
+| RRT | Line-of-sight sampled at half a cell | Stepped over a 2.15 cm clip with 2.7 cm sampling |
+| RRT | Goal link connected on distance alone | Final hop onto the goal was never collision-checked |
+| SMAC | Straight motion primitive returned only its endpoint | 0.15 m move spans 3 cells at 5 cm; 1 was checked |
+| Hybrid | Goal gate needed distance **and** heading simultaneously on a 0.3 m lattice | Never terminated — tree stalled 0.53 m from the goal at any iteration count |
+| Hybrid | Smoother checked the moved point, not the legs into it | Waypoint slid somewhere free while its leg cut a corner through a wall |
+| Hybrid | `_get_merged_cost` / `_is_arc_collision_free` defined twice | 42 lines of dead code; same int8 sign bug as RRT |
+| Pure Pursuit | Lookahead scanned from index 0 | Once a lookahead from the start, the start itself qualified — the robot **turned around and chased its own path start** |
+| Stanley | Closest-point search scanned the whole path | Could snap the reference onto an earlier leg |
+| TEB | Elastic band built once from the head of the path, never advanced | Robot orbited waypoint 2 forever |
 
-## DWA rollout + score
+A\* came through clean: zero true corner-cuts across every map, and the 14
+diagonal steps that squeeze past one blocked orthogonal are legal for a point
+robot on an inflated costmap.
 
-Median of 25 runs, horizon `T = 25` (2.5 s at `dt = 0.1`). The Python
-implementation rolls out all trajectories at once with numpy; the C++ one
-sweeps `(v, ω)` in a scalar double loop with an early break on collision.
+## Known bounds, not bugs
 
-| Window | Trajectories | Python | C++ | Per-trajectory speedup |
-| --- | ---: | ---: | ---: | ---: |
-| Accel-limited (one control cycle) | 36 / 30 | 0.3037 ms | 0.0098 ms | **26×** |
-| Full velocity space | 2,626 | 4.2121 ms | 1.0570 ms | **4×** |
+The kinematic planners carry a 0.22 m minimum turning radius, so they need
+about 0.44 m to come about. A maze with 0.5 m corridors sits at that bound and
+the hybrid fails it at 8k, 30k and 60k iterations alike — geometry, not search
+budget. They are scored on maps whose corridors fit, and the tight mazes score
+the holonomic planners only.
 
-The interesting result is that the gap *shrinks* as the batch grows. At the
-window the controller actually evaluates each cycle, numpy is paying fixed
-per-call overhead across a few dozen trajectories and loses badly. Give it
-2,626 trajectories and that overhead amortises, and vectorisation closes the
-gap to 4×.
+RRT's default was raised from 2,000 to 20,000 iterations. Uniform sampling
+needs far more draws to thread a narrow passage, and the loop breaks as soon as
+the goal connects, so open maps still finish in ~20 ms.
 
-So the C++ port buys the most where it matters least — both versions clear a
-20 Hz budget on the per-cycle window with room to spare — and buys the least
-in the wide-sweep case that would actually benefit. The global planner is where
-the port earns its keep.
+## Local controller vs other DWA implementations
 
-The two windows sample slightly different counts (36 vs 30) because
-`_dynamic_window` builds its ranges with `np.arange(lo, hi + res, res)`, which
-overshoots the upper bound by one sample. The table compares per-trajectory
-cost to account for it. The full-velocity-space row samples 2,626 in both.
+Four implementations, same dynamic window, same trajectory count, same 25-step
+horizon. Baselines are fetched by `bench/fetch_baselines.sh`, not vendored.
+
+| Trajectories | This repo (C++) | [CppRobotics](https://github.com/onlytailei/CppRobotics) (C++) | [goktug97](https://github.com/goktug97/DynamicWindowApproach) (C) | [PythonRobotics](https://github.com/AtsushiSakai/PythonRobotics) (Py) |
+| ---: | ---: | ---: | ---: | ---: |
+| 36 | **0.011 ms** | 0.013 ms | 0.091 ms | 2.30 ms |
+| 100 | **0.030 ms** | 0.032 ms | 0.303 ms | 7.16 ms |
+| 400 | **0.120 ms** | 0.142 ms | 1.353 ms | 33.84 ms |
+| 900 | **0.275 ms** | 0.315 ms | 3.159 ms | 78.25 ms |
+| 2,500 | **0.760 ms** | 0.884 ms | 8.950 ms | 219.36 ms |
+
+Read the middle column first. Against another C++ DWA this repo is within
+10–20 percent — near parity, not a win. Most of the 60× over PythonRobotics is
+Python versus C++, and most of the 8–12× over goktug97 is that it walks a point
+cloud per sample where this repo does an O(1) costmap lookup.
+
+That lookup is the one structural difference, and it shows up as flat scaling
+in clutter (Python side, 400 trajectories):
+
+| Obstacles | This repo | PythonRobotics |
+| ---: | ---: | ---: |
+| 20 | 0.64 ms | 29.40 ms |
+| 500 | 0.64 ms | 68.17 ms |
+| 2,000 | 0.64 ms | **326.99 ms** |
+
+Flat versus linear. A costmap has to be built and maintained, so this is a
+trade rather than a free win.
+
+ROS-coupled implementations (`nav2_dwb_controller`, `amslabtech/dwa_planner`,
+`teb_local_planner`) are not in the table: they need a live ROS 2 graph and
+costmap plugins to run at all, so any number taken outside that would be
+measuring the harness. The Nav2 comparison below uses their published figures
+instead.
+
+## Global planner vs Nav2
+
+Reference is Table I of Macenski et al., [*Cost-Aware Kinematically Feasible
+Planning for Mobile and Surface Robotics*](https://arxiv.org/abs/2401.13078).
+`nav2_maps.py` rebuilds their map and query geometry: 10,000 m² random
+occupancy maps at 5 cm resolution (2000 × 2000 cells), ~50 m paths.
+
+| Density | This repo, C++ A\* | Smac 2D-A\* | NavFn | Hybrid-A\* | SBPL ARA\* |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 10% | **5.0 ms** | 66.2 ms | 71.1 ms | 39.1 ms | 5,640 ms |
+| 15% | **6.8 ms** | 85.6 ms | 66.5 ms | 40.7 ms | 6,587 ms |
+| 20% | **15.1 ms** | 88.8 ms | 61.0 ms | 38.8 ms | 6,633 ms |
+
+Read with the caveats. Their CPU (Ryzen 5 5600X) is considerably faster than
+the one these came off, which flatters this repo. Against that, Smac 2D-A\* is
+cost-aware and returns a smoothed path, and NavFn solves a full navigation
+function — both do more per call than a plain octile A\*. The honest claim is
+same order of magnitude on equivalent maps, not that it beats Nav2.
+
+## Python vs C++ in this repo
+
+| Map | Python A\* | C++ A\* | Speedup |
+| --- | ---: | ---: | ---: |
+| 128 × 128 | 7.50 ms | 0.046 ms | 163× |
+| 256 × 256 | 110.26 ms | 1.115 ms | 99× |
+| 384 × 384 | 884.21 ms | 4.598 ms | 192× |
+
+Not all language: the C++ port also added a closed set, so it expands 21,015
+nodes where Python expands 61,631 on the same map. Roughly 3× is algorithmic.
+
+For the DWA rollout the gap *shrinks* with batch size — 26× per trajectory at
+the accel-limited window the controller actually evaluates, down to 4× at
+2,626 trajectories, because numpy's fixed per-call overhead amortises away.
 
 ## Files
 
 | | |
 | --- | --- |
-| `maps.py` | Deterministic costmaps, BFS-verified reachable, dumped for both harnesses |
-| `bench_astar.py` / `.cpp` | A\* timing |
-| `bench_dwa.py` / `.cpp` | DWA rollout + score timing |
-| `report.py` | Prints the tables above from the result JSON |
-| `run.sh` | Regenerates everything |
+| `rig.py` | ROS stubs, node loader, path validators, closed-loop driver |
+| `maps.py` | Mazes, room maps, costmap inflation |
+| `test_planners.py` | The correctness suite |
+| `dwa_compare.py` | vs PythonRobotics |
+| `nav2_maps.py`, `nav2_compare.py` | vs the Nav2 Smac Planner paper |
+| `bench_astar.*`, `bench_dwa.*` | Python vs C++ latency |
+
+Measured on an Intel Xeon @ 2.10 GHz, g++ 13.3 `-O2`, Python 3.11, numpy 2.4.
+Absolute numbers move with hardware; the ratios are the point.
