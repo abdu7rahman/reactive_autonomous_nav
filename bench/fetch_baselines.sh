@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Pulls the third-party DWA implementations this repo is benchmarked against.
+# They are fetched rather than vendored, so bench/.third_party is gitignored.
+set -euo pipefail
+D="$(dirname "$0")/.third_party"; mkdir -p "$D"
+base=https://raw.githubusercontent.com
+curl -sfL "$base/goktug97/DynamicWindowApproach/master/src/dwa.c" -o "$D/dwa.c"
+curl -sfL "$base/goktug97/DynamicWindowApproach/master/src/dwa.h" -o "$D/dwa.h"
+curl -sfL "$base/onlytailei/CppRobotics/master/src/dynamic_window_approach.cpp" \
+  | sed '/opencv2/d' | sed -n '1,/^cv::Point2i cv_offset(/p' | sed '$d' > "$D/cpprobotics_core.h"
+echo "fetched: goktug97 (C), CppRobotics (C++) -> $D"
