@@ -324,17 +324,29 @@ def drive(node, grid, path_pts, start_pose, dt=0.1, max_steps=1500,
     if getattr(node, "current_path", None) is None:
         node.current_path = msg
     node.goal_reached = False
+
+    def tf(target, source, p=(x, y, yaw)):
+        """Frame-aware stub.
+
+        Returning the robot pose for every frame pair is wrong for any node
+        that asks for odom<-map: it would transform the goal by the robot's own
+        pose. Here base_link resolves to the pose and odom/map are aligned,
+        which is what they are before localisation drifts.
+        """
+        return p if "base_link" in (target, source) else (0.0, 0.0, 0.0)
+
     node._get_robot_pose = lambda: (x, y, yaw)
-    node._get_tf = lambda target, source: (x, y, yaw)
+    node._get_tf = tf
 
     gx, gy = path_pts[-1]
     travelled = 0.0
     collided = False
     steps = 0
+    vmax = 0.0
     for steps in range(1, max_steps + 1):
         pose_now = (x, y, yaw)
         node._get_robot_pose = lambda p=pose_now: p
-        node._get_tf = lambda target, source, p=pose_now: p
+        node._get_tf = lambda target, source, p=pose_now: tf(target, source, p)
         node.current_pose = types.SimpleNamespace(x=x, y=y, yaw=yaw)
         before = len(cmd.msgs)
         node._control_loop()
@@ -346,6 +358,11 @@ def drive(node, grid, path_pts, start_pose, dt=0.1, max_steps=1500,
             m = cmd.msgs[-1]
             v = float(getattr(m.linear, "x", 0.0))
             w = float(getattr(m.angular, "z", 0.0))
+        # close the odometry loop: a node that sizes its window off the
+        # measured velocity has to be told what the plant actually did
+        if isinstance(getattr(node, "current_vel", None), dict):
+            node.current_vel = {"v": v, "omega": w}
+        vmax = max(vmax, abs(v))
         nx = x + v * math.cos(yaw) * dt
         ny = y + v * math.sin(yaw) * dt
         yaw = (yaw + w * dt + math.pi) % (2 * math.pi) - math.pi
@@ -360,7 +377,7 @@ def drive(node, grid, path_pts, start_pose, dt=0.1, max_steps=1500,
             break
 
     return {"reached": bool(node.goal_reached), "collided": collided,
-            "steps": steps, "length": travelled,
+            "steps": steps, "length": travelled, "vmax": vmax,
             "final": (x, y, yaw),
             "dist_to_goal": math.hypot(x - gx, y - gy)}
 

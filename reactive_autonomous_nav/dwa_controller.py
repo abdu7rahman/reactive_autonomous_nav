@@ -184,6 +184,19 @@ class DWAControllerNode(Node):
             min( self.max_yawrate,  w + self.max_dyawrate * self.dt),
         ]
 
+    @staticmethod
+    def _samples(lo, hi, res):
+        """Inclusive samples across [lo, hi], never empty, never past hi.
+
+        np.arange(lo, hi + res, res) gets both ends wrong: it admits one
+        sample beyond hi (so the command can exceed max_vel or the clearance
+        cap), and it returns nothing at all when hi < lo, which happens every
+        time an external cap is applied below the window's own floor.
+        """
+        if hi <= lo:
+            return np.array([lo])
+        return np.linspace(lo, hi, int(round((hi - lo) / res)) + 1)
+
     # ================================================================
     #  Vectorised costmap helpers
     # ================================================================
@@ -274,19 +287,28 @@ class DWAControllerNode(Node):
                 x, y, scores, lethal_hit, N, T)
 
     # ================================================================
-    #  Forward clearance (3-ray cone)
+    #  Forward clearance
     # ================================================================
     def _forward_clearance(self, ox, oy, otheta) -> float:
-        min_clear = float('inf')
-        for angle_off in [-0.3, 0.0, 0.3]:
-            a = otheta + angle_off
-            for d in np.arange(0.1, 2.0, 0.05):
-                c = self._costmap_value(ox + d * np.cos(a),
-                                        oy + d * np.sin(a))
-                if c >= LETHAL_COST:
-                    min_clear = min(min_clear, d)
-                    break
-        return min_clear
+        """Free distance straight ahead of the robot.
+
+        Three rays fanned out at ±0.3 rad measured the range to whatever those
+        rays happened to hit rather than the room in front of the robot: in a
+        straight corridor, being 0.1 m off-centre put a side wall 0.6 m down
+        the angled ray and throttled the robot to 0.18 m/s with metres of clear
+        floor ahead of it.
+
+        The centre line is the right query and the consistent one. The costmap
+        carries the inscribed band, which is what makes a centre-point lethal
+        check a footprint check -- it is how _score_trajectories reads the map
+        two calls later, and widening the scan by the robot radius on top of it
+        asks for twice the robot's width of clearance.
+        """
+        ca, sa = math.cos(otheta), math.sin(otheta)
+        for d in np.arange(0.1, 2.0, 0.05):
+            if self._costmap_value(ox + d * ca, oy + d * sa) >= LETHAL_COST:
+                return float(d)
+        return float('inf')
 
     # ================================================================
     #  Stuck detection / recovery
@@ -297,20 +319,33 @@ class DWAControllerNode(Node):
         p0, p1 = self.position_history[0], self.position_history[-1]
         return np.hypot(p1[0] - p0[0], p1[1] - p0[1]) < self.stuck_threshold
 
-    def _recovery(self):
+    def _recovery(self, ox, oy, otheta):
+        """Spin toward open space, then nudge forward only if there is any.
+
+        This used to run entirely open loop: alternate the spin direction, then
+        command +0.1 m/s for ten ticks with no costmap check. The one situation
+        it exists to handle is an obstacle in front of the robot, so the
+        unconditional push drove into the thing that caused the stall.
+        """
         self.recovery_timer += 1
         t = Twist()
-        if self.recovery_timer <= 20:
+
+        if self.recovery_timer == 1:
+            left  = self._forward_clearance(ox, oy, otheta + math.pi / 2.0)
+            right = self._forward_clearance(ox, oy, otheta - math.pi / 2.0)
+            self.recovery_dir = 1.0 if left >= right else -1.0
+
+        if self.recovery_timer <= 20 or self._forward_clearance(ox, oy, otheta) < 0.35:
             t.angular.z = 0.8 * self.recovery_dir
         else:
             t.linear.x = 0.1
-            if self.recovery_timer >= 30:
-                self.recovery_mode  = False
-                self.recovery_timer = 0
-                self.recovery_dir   = -self.recovery_dir
-                self.position_history.clear()
-                self.replan_pub.publish(String(data='replan'))
-                self.get_logger().info('Recovery done — requesting replan')
+
+        if self.recovery_timer >= 30:
+            self.recovery_mode  = False
+            self.recovery_timer = 0
+            self.position_history.clear()
+            self.replan_pub.publish(String(data='replan'))
+            self.get_logger().info('Recovery done — requesting replan')
         self.cmd_pub.publish(t)
 
     # ================================================================
@@ -470,6 +505,14 @@ class DWAControllerNode(Node):
             return
 
         # ── lookahead goal (map frame) ───────────────────────────────
+        # Deliberately short. The rollout reaches predict_time * max_vel, so a
+        # target that far out lets fast constant-arc trajectories win -- and in
+        # anything tighter than an open room those arcs end in a wall, the
+        # tracker stops advancing its waypoint and the recovery behaviour takes
+        # over. Measured on bench/test_dwa_window.py's maps: pushing the target
+        # from 0.4 m to 1.0 m raises the top speed from 0.22 to 0.46 m/s and
+        # the path-length ratio from 1.05 to 2.36, and the goal is never
+        # reached. Close tracking beats a high top speed here.
         tidx   = min(self.wp_idx + self.lookahead_wps,
                      len(self.current_path) - 1)
         gx_map = self.current_path[tidx].pose.position.x
@@ -491,7 +534,7 @@ class DWAControllerNode(Node):
             self.recovery_mode  = True
             self.recovery_timer = 0
         if self.recovery_mode:
-            self._recovery()
+            self._recovery(ox, oy, otheta)
             return
 
         # ── forward clearance cap ────────────────────────────────────
@@ -499,13 +542,15 @@ class DWAControllerNode(Node):
         v_cap = 0.08 if fwd < 0.35 else (0.18 if fwd < 0.7 else self.max_vel)
 
         # ── dynamic window ───────────────────────────────────────────
+        # The cap trims the reachable top speed; it cannot push the window
+        # below the floor set by max_accel. Closing on an obstacle at 0.30 m/s
+        # used to leave dw = [0.26, 0.08] and command a dead stop -- the one
+        # velocity the base cannot actually produce.
         dw = self._dynamic_window()
-        dw[1] = min(dw[1], v_cap)
+        dw[1] = max(dw[0], min(dw[1], v_cap))
 
-        vs = np.arange(dw[0], dw[1] + self.vel_res,     self.vel_res)
-        ws = np.arange(dw[2], dw[3] + self.yawrate_res,  self.yawrate_res)
-        if vs.size == 0:
-            vs = np.array([0.0])
+        vs = self._samples(dw[0], dw[1], self.vel_res)
+        ws = self._samples(dw[2], dw[3], self.yawrate_res)
 
         # ── vectorised scoring ───────────────────────────────────────
         (best_v, best_w, best_score,
