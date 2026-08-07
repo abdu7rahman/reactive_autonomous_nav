@@ -1,0 +1,16 @@
+[
+ {
+  "window": "accel-limited",
+  "N": 36,
+  "T": 25,
+  "ms": 0.3037,
+  "min_ms": 0.2415
+ },
+ {
+  "window": "full velocity space",
+  "N": 2626,
+  "T": 25,
+  "ms": 4.2121,
+  "min_ms": 3.8504
+ }
+]

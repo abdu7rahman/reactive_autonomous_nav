@@ -343,34 +343,72 @@ class ThetaStarPlannerNode(Node):
         return None, explored
 
     # ================================================================
-    #  Line-of-sight — fast Bresenham with direct array access
+    #  Line-of-sight — conservative grid traversal
     # ================================================================
     @staticmethod
     def _line_of_sight_fast(p1, p2, grid, H, W, lethal):
-        """Bresenham line check using direct numpy array indexing."""
+        """True when the straight segment p1->p2 stays out of every blocked cell.
+
+        Amanatides-Woo traversal rather than Bresenham. Bresenham walks a *thin*
+        line -- one cell per step -- so it can skip a cell the segment actually
+        passes through, and Theta* would then hand back a path straight across a
+        wall corner. This visits every cell the segment enters.
+
+        Cell (r, c) owns the square [r-0.5, r+0.5] x [c-0.5, c+0.5]. Endpoints
+        are cell centres, so the first boundary is always half a cell away.
+
+        When the segment crosses an exact cell corner it only grazes the two
+        diagonal neighbours; that is passable for a point robot unless *both*
+        are blocked, which is the usual any-angle corner rule.
+        """
         r0, c0 = p1
         r1, c1 = p2
-        dr = abs(r1 - r0)
-        dc = abs(c1 - c0)
-        sr = 1 if r1 > r0 else -1
-        sc = 1 if c1 > c0 else -1
-        err = dr - dc
-        while True:
-            if not (0 <= r0 < H and 0 <= c0 < W):
+        dr = r1 - r0
+        dc = c1 - c0
+
+        r, c = r0, c0
+        step_r = 1 if dr > 0 else (-1 if dr < 0 else 0)
+        step_c = 1 if dc > 0 else (-1 if dc < 0 else 0)
+
+        inf = float('inf')
+        t_max_r = (0.5 / abs(dr)) if dr else inf
+        t_max_c = (0.5 / abs(dc)) if dc else inf
+        t_step_r = (1.0 / abs(dr)) if dr else inf
+        t_step_c = (1.0 / abs(dc)) if dc else inf
+
+        # bounded so a degenerate direction can never spin forever
+        for _ in range(2 * (abs(dr) + abs(dc)) + 4):
+            if not (0 <= r < H and 0 <= c < W):
                 return False
-            v = grid[r0, c0]
+            v = grid[r, c]
             if v < 0 or v >= lethal:
                 return False
-            if r0 == r1 and c0 == c1:
-                break
-            e2 = 2 * err
-            if e2 > -dc:
-                err -= dc
-                r0  += sr
-            if e2 < dr:
-                err += dr
-                c0  += sc
-        return True
+            if r == r1 and c == c1:
+                return True
+
+            if t_max_r < t_max_c - 1e-12:
+                t_max_r += t_step_r
+                r += step_r
+            elif t_max_c < t_max_r - 1e-12:
+                t_max_c += t_step_c
+                c += step_c
+            else:
+                # exact corner crossing: only a graze, so allow it unless the
+                # segment would have to squeeze between two blocked cells
+                ar, ac = r + step_r, c
+                br, bc = r, c + step_c
+                a_blocked = (not (0 <= ar < H and 0 <= ac < W)) or \
+                            grid[ar, ac] < 0 or grid[ar, ac] >= lethal
+                b_blocked = (not (0 <= br < H and 0 <= bc < W)) or \
+                            grid[br, bc] < 0 or grid[br, bc] >= lethal
+                if a_blocked and b_blocked:
+                    return False
+                t_max_r += t_step_r
+                t_max_c += t_step_c
+                r += step_r
+                c += step_c
+
+        return False
 
     # ================================================================
     #  RViz marker helpers

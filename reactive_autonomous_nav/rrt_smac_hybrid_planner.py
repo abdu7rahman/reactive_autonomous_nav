@@ -32,7 +32,11 @@ AVOID_COST  = 200
 FREE_COST   = 10
 
 # ── Planner params ───────────────────────────────────────────────────
-MAX_ITER = 3000
+# 3000 only solved a 10x10 m room map 2 runs in 6 -- the kinematic lattice
+# needs more samples than a holonomic RRT to work a corner. 8000 was 6/6 and
+# costs nothing on easy maps because the loop exits as soon as the goal
+# connects.
+MAX_ITER = 8000
 GOAL_REACH_DIST = 0.25
 GOAL_REACH_ANGLE = 0.3
 GOAL_BIAS = 0.2  # 20% goal-directed sampling
@@ -41,6 +45,14 @@ GOAL_BIAS = 0.2  # 20% goal-directed sampling
 MIN_TURN_RADIUS = 0.22
 ARC_LENGTH = 0.3
 MAX_STEER_ANGLE = ARC_LENGTH / MIN_TURN_RADIUS
+
+# Analytic connection window. Motion primitives land on a 0.3 m lattice, so
+# requiring a node inside GOAL_REACH_DIST *and* GOAL_REACH_ANGLE by chance
+# almost never happens -- the search would run out of iterations with the tree
+# sitting half a metre from the goal. Instead try the direct connection from a
+# few arc lengths out and let the collision check decide.
+ANALYTIC_CONNECT_DIST = 3.0 * ARC_LENGTH
+ANALYTIC_CONNECT_ANGLE = math.pi / 3.0
 
 STEER_SAMPLES = [
     -MAX_STEER_ANGLE,
@@ -203,48 +215,6 @@ class HybridRRTSMACPlannerNode(Node):
     # ================================================================
     #  CRITICAL: Dual Costmap Evaluation
     # ================================================================
-    def _get_merged_cost(self, wx, wy):
-        """
-        ⭐ KEY METHOD: Checks BOTH global AND local costmaps.
-        Returns: max(global_cost, local_cost) for conservative obstacle avoidance.
-        This ensures paths avoid BOTH static (global) AND dynamic (local) obstacles.
-        """
-        global_cost = 0
-        local_cost = 0
-
-        # Check global costmap (static obstacles)
-        if self.global_data is not None and self.global_info is not None:
-            gr, gc = self._w2g_global(wx, wy)
-            if gr is not None and 0 <= gr < self.global_info.height and \
-               0 <= gc < self.global_info.width:
-                global_cost = int(self.global_data[gr, gc])
-            else:
-                global_cost = LETHAL_COST  # Out of bounds
-
-        # Check local costmap (dynamic obstacles + inflation)
-        if self.local_data is not None and self.local_info is not None:
-            lr, lc = self._w2g_local(wx, wy)
-            if lr is not None and 0 <= lr < self.local_info.height and \
-               0 <= lc < self.local_info.width:
-                local_cost = int(self.local_data[lr, lc])
-
-        # Return maximum cost (conservative)
-        return max(global_cost, local_cost)
-
-    def _is_arc_collision_free(self, arc_points):
-        """
-        Collision check for kinematic arc.
-        ⭐ Every point evaluated against BOTH costmaps.
-        """
-        for x, y, _ in arc_points:
-            cost = self._get_merged_cost(x, y)
-            if cost >= LETHAL_COST or cost < 0:
-                return False
-        return True
-
-    # ================================================================
-    #  Kinematic Arc Generation (SMAC-inspired)
-    # ================================================================
     def _compute_arc(self, x, y, yaw, steer):
         """Generate kinematic arc respecting turning radius."""
         if abs(steer) < 1e-6:
@@ -326,7 +296,7 @@ class HybridRRTSMACPlannerNode(Node):
             return
 
         self.get_logger().info(
-            f'✓ Path: {len(path)} waypoints, {elapsed:.2f}s '
+            f'Path: {len(path)} waypoints, {elapsed:.2f}s '
             f'(dual-costmap checked at every expansion)')
 
         self._publish_path(path, goal_msg.header.stamp)
@@ -342,7 +312,7 @@ class HybridRRTSMACPlannerNode(Node):
           1. Sample random state OR goal (RRT exploration)
           2. Find nearest node in tree
           3. Expand with kinematic arcs (SMAC motion primitives)
-          4. ⭐ Check BOTH costmaps for each arc point ⭐
+          4. Check BOTH costmaps for each arc point
           5. Add collision-free nodes to tree
           6. Check goal reachability
         
@@ -386,17 +356,12 @@ class HybridRRTSMACPlannerNode(Node):
                 if len(arc) == 0:
                     continue
 
-                # === 4. ⭐ DUAL COSTMAP CHECK ⭐ ===
-                collision_free = True
-                for x, y, _ in arc:
-                    global_checks += 1
-                    local_checks += 1
-                    
-                    cost = self._get_merged_cost(x, y)
-                    if cost >= LETHAL_COST or cost < 0:
-                        collision_free = False
-                        rejections += 1
-                        break
+                # === 4. DUAL COSTMAP CHECK ===
+                global_checks += len(arc)
+                local_checks += len(arc)
+                collision_free = self._is_arc_collision_free(arc)
+                if not collision_free:
+                    rejections += 1
 
                 if not collision_free:
                     continue
@@ -426,11 +391,11 @@ class HybridRRTSMACPlannerNode(Node):
             dist = math.hypot(nx - gx, ny - gy)
             angle_diff = abs(_angle_wrap(nyaw - gyaw))
 
-            if dist < GOAL_REACH_DIST and angle_diff < GOAL_REACH_ANGLE:
+            if dist < ANALYTIC_CONNECT_DIST and angle_diff < ANALYTIC_CONNECT_ANGLE:
                 # Try direct connection
                 final_arc = self._compute_direct_connection(nx, ny, nyaw, gx, gy, gyaw)
                 
-                # ⭐ Final arc also checked against BOTH costmaps
+                # Final arc also checked against BOTH costmaps
                 if self._is_arc_collision_free(final_arc):
                     goal_node = HybridNode(gx, gy, gyaw)
                     goal_node.parent = new_node
@@ -463,7 +428,7 @@ class HybridRRTSMACPlannerNode(Node):
 
     def _smooth_path_dual_check(self, path, iterations=15):
         """
-        Smooth path with ⭐ dual costmap validation ⭐.
+        Smooth path with dual costmap validation.
         Only accept smoothed points that pass BOTH costmap checks.
         """
         if len(path) < 3:
@@ -476,13 +441,25 @@ class HybridRRTSMACPlannerNode(Node):
                 # Weighted average
                 new_x = 0.25 * smoothed[i-1][0] + 0.5 * smoothed[i][0] + 0.25 * smoothed[i+1][0]
                 new_y = 0.25 * smoothed[i-1][1] + 0.5 * smoothed[i][1] + 0.25 * smoothed[i+1][1]
-                
-                # ⭐ Check BOTH costmaps before accepting
-                cost = self._get_merged_cost(new_x, new_y)
-                if cost < LETHAL_COST:
+
+                # Accept only if the two segments this point sits on stay clear.
+                # Testing the point alone let a waypoint slide somewhere free
+                # while the leg reaching it cut a corner through a wall.
+                if (self._segment_free(smoothed[i-1][0], smoothed[i-1][1], new_x, new_y)
+                        and self._segment_free(new_x, new_y,
+                                               smoothed[i+1][0], smoothed[i+1][1])):
                     smoothed[i][0] = new_x
                     smoothed[i][1] = new_y
-        
+
+        # A neighbour moving later can invalidate a leg accepted earlier, so
+        # sweep once more and roll back any point whose legs no longer clear.
+        for i in range(1, len(smoothed) - 1):
+            if not (self._segment_free(smoothed[i-1][0], smoothed[i-1][1],
+                                       smoothed[i][0], smoothed[i][1])
+                    and self._segment_free(smoothed[i][0], smoothed[i][1],
+                                           smoothed[i+1][0], smoothed[i+1][1])):
+                smoothed[i][0], smoothed[i][1] = path[i][0], path[i][1]
+
         return [(p[0], p[1], p[2]) for p in smoothed]
 
     # ================================================================
@@ -490,7 +467,7 @@ class HybridRRTSMACPlannerNode(Node):
     # ================================================================
     def _get_merged_cost(self, wx, wy):
         """
-        ⭐⭐⭐ CRITICAL METHOD ⭐⭐⭐
+        CRITICAL METHOD
         
         Evaluates cost from BOTH global AND local costmaps.
         Returns max(global_cost, local_cost) for conservative safety.
@@ -510,6 +487,11 @@ class HybridRRTSMACPlannerNode(Node):
             if gr is not None and 0 <= gr < self.global_info.height and \
                0 <= gc < self.global_info.width:
                 global_cost = int(self.global_data[gr, gc])
+                # OccupancyGrid.data is int8: a cost above 127 arrives negative
+                # (254 -> -2) and -1 means unknown. Both are impassable, and
+                # max() would otherwise let them through as free space.
+                if global_cost < 0:
+                    global_cost = 255
             else:
                 global_cost = LETHAL_COST
 
@@ -519,18 +501,66 @@ class HybridRRTSMACPlannerNode(Node):
             if lr is not None and 0 <= lr < self.local_info.height and \
                0 <= lc < self.local_info.width:
                 local_cost = int(self.local_data[lr, lc])
+                if local_cost < 0:
+                    local_cost = 255
 
         return max(global_cost, local_cost)
 
-    def _is_arc_collision_free(self, arc_points):
+    def _segment_free(self, x1, y1, x2, y2) -> bool:
+        """Every global-grid cell the segment enters is free in both costmaps.
+
+        Amanatides-Woo traversal, evaluated at each cell centre so the dual
+        costmap lookup is unchanged. Checking only the sampled arc poses missed
+        cells between them -- a straight primitive is emitted as just its two
+        endpoints but spans six cells at 5 cm resolution.
         """
-        ⭐ DUAL COSTMAP COLLISION CHECK ⭐
-        Every single point in arc is evaluated against BOTH maps.
-        """
-        for x, y, _ in arc_points:
-            cost = self._get_merged_cost(x, y)
+        if self.global_info is None:
+            return False
+        res = self.global_info.resolution
+        ox, oy = self.global_origin
+        fc0, fr0 = (x1 - ox) / res, (y1 - oy) / res
+        fc1, fr1 = (x2 - ox) / res, (y2 - oy) / res
+        c, r = int(math.floor(fc0)), int(math.floor(fr0))
+        c_end, r_end = int(math.floor(fc1)), int(math.floor(fr1))
+        dc, dr = fc1 - fc0, fr1 - fr0
+        step_c = 1 if dc > 0 else (-1 if dc < 0 else 0)
+        step_r = 1 if dr > 0 else (-1 if dr < 0 else 0)
+        inf = float('inf')
+        t_max_c = ((c + (step_c > 0)) - fc0) / dc if dc else inf
+        t_max_r = ((r + (step_r > 0)) - fr0) / dr if dr else inf
+        t_step_c = abs(1.0 / dc) if dc else inf
+        t_step_r = abs(1.0 / dr) if dr else inf
+        for _ in range(2 * (abs(c_end - c) + abs(r_end - r)) + 4):
+            cx = (c + 0.5) * res + ox
+            cy = (r + 0.5) * res + oy
+            cost = self._get_merged_cost(cx, cy)
             if cost >= LETHAL_COST or cost < 0:
                 return False
+            if r == r_end and c == c_end:
+                return True
+            if t_max_c < t_max_r:
+                t_max_c += t_step_c
+                c += step_c
+            else:
+                t_max_r += t_step_r
+                r += step_r
+        return False
+
+    def _is_arc_collision_free(self, arc_points):
+        """
+        DUAL COSTMAP COLLISION CHECK
+        Every cell the arc passes through is evaluated against BOTH maps.
+        """
+        if not arc_points:
+            return False
+        px, py, _ = arc_points[0]
+        cost = self._get_merged_cost(px, py)
+        if cost >= LETHAL_COST or cost < 0:
+            return False
+        for x, y, _ in arc_points[1:]:
+            if not self._segment_free(px, py, x, y):
+                return False
+            px, py = x, y
         return True
 
     # ================================================================

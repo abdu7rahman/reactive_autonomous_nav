@@ -1,0 +1,4 @@
+[
+ {"window": "accel-limited", "N": 30, "T": 25, "ms": 0.0098, "min_ms": 0.0098},
+ {"window": "full velocity space", "N": 2626, "T": 25, "ms": 1.0570, "min_ms": 1.0001}
+]

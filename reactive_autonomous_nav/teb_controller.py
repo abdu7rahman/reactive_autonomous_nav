@@ -47,6 +47,7 @@ class TEBControllerNode(Node):
         self.current_path   = None
         self.goal_reached   = False
         self.band           = []
+        self._wp_idx        = 0
 
         self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -74,9 +75,36 @@ class TEBControllerNode(Node):
     def _path_cb(self, msg: Path):
         self.current_path = msg.poses
         self.goal_reached = False
-        self.band = []
-        for ps in self.current_path[:self.lookahead_wps]:
-            self.band.append([ps.pose.position.x, ps.pose.position.y])
+        self._wp_idx      = 0
+        self._rebuild_band()
+
+    def _rebuild_band(self, rx=None, ry=None):
+        """Slide the elastic band over the next lookahead_wps path points.
+
+        The band used to be built once from the head of the path and never
+        moved, so the controller steered at band[2] -- a fixed point a couple
+        of waypoints from the start -- and orbited it instead of advancing.
+        """
+        if not self.current_path:
+            self.band = []
+            return
+        i = min(self._wp_idx, len(self.current_path) - 1)
+        window = self.current_path[i:i + self.lookahead_wps]
+        head = [rx, ry] if rx is not None else [
+            window[0].pose.position.x, window[0].pose.position.y]
+        self.band = [head] + [[ps.pose.position.x, ps.pose.position.y]
+                              for ps in window]
+
+    def _advance_wp(self, rx, ry):
+        """Move the window start to the closest waypoint, never backwards."""
+        best_i, best_d = self._wp_idx, float('inf')
+        upto = min(len(self.current_path), self._wp_idx + 4 * self.lookahead_wps)
+        for i in range(self._wp_idx, upto):
+            p = self.current_path[i].pose.position
+            d = math.hypot(p.x - rx, p.y - ry)
+            if d < best_d:
+                best_d, best_i = d, i
+        self._wp_idx = best_i
 
     def _costmap_cb(self, msg: OccupancyGrid):
         self.costmap_data   = np.array(msg.data, dtype=np.int16).reshape(
@@ -106,7 +134,10 @@ class TEBControllerNode(Node):
             return
         rx, ry, ryaw = pose
 
-        self.band[0] = [rx, ry]
+        self._advance_wp(rx, ry)
+        self._rebuild_band(rx, ry)
+        if len(self.band) < 2:
+            return
 
         if self.costmap_data is not None:
             self._deform_band()

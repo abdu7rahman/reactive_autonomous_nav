@@ -41,7 +41,10 @@ class RRTPlannerNode(Node):
         super().__init__('rrt_planner_node')
 
         # ── RRT params ───────────────────────────────────────────────
-        self.max_iter   = 2000
+        # 2000 never solved a maze with 0.5 m corridors -- uniform sampling
+        # needs far more draws to thread a narrow passage. The loop breaks as
+        # soon as the goal connects, so open maps still finish in ~20 ms.
+        self.max_iter   = 20000
         self.step_size  = 0.3    # m
         self.goal_bias  = 0.1
         self.goal_reach_dist = 0.2
@@ -149,18 +152,55 @@ class RRTPlannerNode(Node):
         r, c = self._w2g(wx, wy)
         if not (0 <= r < self.global_info.height and 0 <= c < self.global_info.width):
             return False
-        return self.global_data[r, c] < LETHAL_COST
+        v = int(self.global_data[r, c])
+        # OccupancyGrid.data is int8, so a costmap value above 127 arrives
+        # negative (254 -> -2). Unknown is -1. Both must read as blocked; a bare
+        # `v < LETHAL_COST` lets every inflated wall through as free space.
+        return 0 <= v < LETHAL_COST
 
     def _line_of_sight(self, x1, y1, x2, y2):
-        dist = math.hypot(x2 - x1, y2 - y1)
-        steps = int(dist / (self.global_info.resolution * 0.5))
-        for i in range(steps + 1):
-            t = i / float(steps) if steps > 0 else 0
-            px = x1 + t * (x2 - x1)
-            py = y1 + t * (y2 - y1)
-            if not self._is_free(px, py):
+        """Exact grid traversal between two world points.
+
+        Point sampling at half a cell can step straight over a corner clip
+        shallower than the sample spacing, which is how a tree edge ends up
+        crossing 2 cm of wall unnoticed. This walks every cell the segment
+        actually enters instead (Amanatides-Woo), so the result does not depend
+        on a sampling rate.
+        """
+        res = self.global_info.resolution
+        ox, oy = self.global_origin
+        H, W = self.global_info.height, self.global_info.width
+
+        fc0, fr0 = (x1 - ox) / res, (y1 - oy) / res
+        fc1, fr1 = (x2 - ox) / res, (y2 - oy) / res
+        c, r = int(math.floor(fc0)), int(math.floor(fr0))
+        c_end, r_end = int(math.floor(fc1)), int(math.floor(fr1))
+
+        dc, dr = fc1 - fc0, fr1 - fr0
+        step_c = 1 if dc > 0 else (-1 if dc < 0 else 0)
+        step_r = 1 if dr > 0 else (-1 if dr < 0 else 0)
+
+        inf = float('inf')
+        t_max_c = ((c + (step_c > 0)) - fc0) / dc if dc else inf
+        t_max_r = ((r + (step_r > 0)) - fr0) / dr if dr else inf
+        t_step_c = abs(1.0 / dc) if dc else inf
+        t_step_r = abs(1.0 / dr) if dr else inf
+
+        for _ in range(2 * (abs(c_end - c) + abs(r_end - r)) + 4):
+            if not (0 <= r < H and 0 <= c < W):
                 return False
-        return True
+            v = int(self.global_data[r, c])
+            if not (0 <= v < LETHAL_COST):
+                return False
+            if r == r_end and c == c_end:
+                return True
+            if t_max_c < t_max_r:
+                t_max_c += t_step_c
+                c += step_c
+            else:
+                t_max_r += t_step_r
+                r += step_r
+        return False
 
     # ================================================================
     #  RRT Algorithm
@@ -212,7 +252,10 @@ class RRTPlannerNode(Node):
                 new_node.parent = nearest
                 nodes.append(new_node)
 
-                if math.hypot(nx - gx, ny - gy) < self.goal_reach_dist:
+                # the hop from the last node onto the goal is part of the path,
+                # so it needs the same collision check as any other edge
+                if (math.hypot(nx - gx, ny - gy) < self.goal_reach_dist
+                        and self._line_of_sight(nx, ny, gx, gy)):
                     goal_node = RRTNode(gx, gy)
                     goal_node.parent = new_node
                     nodes.append(goal_node)

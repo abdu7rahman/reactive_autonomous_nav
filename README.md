@@ -33,21 +33,87 @@ Custom reactive autonomous navigation stack for TurtleBot4, built on ROS2 Jazzy.
 |---|---|---|
 | `astar` | A* with octile heuristic | Working — Laplacian smoothing, RViz heat-map |
 | `smac` | SMAC Hybrid A* | Working — kinematically feasible, SE2 lattice |
-| `theta_star` | Theta* (any-angle A*) | In progress |
-| `rrt` | RRT | In progress |
-| `rrt_smac_hybrid` | RRT + SMAC hybrid | In progress |
+| `theta_star` | Theta* (any-angle A*) | Working — any-angle, exact grid-traversal line of sight |
+| `rrt` | RRT | Working — shortcut smoothing, collision-checked goal link |
+| `rrt_smac_hybrid` | RRT + SMAC hybrid | Working — kinematic arcs, needs corridors wider than its 0.22 m turning radius |
 
 **Local Controllers** track the global plan reactively:
 
 | Controller | Algorithm | Status |
 |---|---|---|
 | `dwa` | Dynamic Window Approach | Working — vectorized rollout, HSV trajectory viz |
-| `pure_pursuit` | Pure Pursuit | In progress |
-| `stanley` | Stanley | In progress |
-| `teb` | Timed Elastic Band | In progress |
-| `mppi` | MPPI | In progress |
+| `pure_pursuit` | Pure Pursuit | Working — monotonic lookahead, curvature-limited speed |
+| `stanley` | Stanley | Working — monotonic reference point |
+| `teb` | Timed Elastic Band | Working — sliding band window |
+| `mppi` | MPPI | Working — 1000 samples, 56-step horizon |
 
 ---
+
+## How it compares
+
+Everything below is reproducible from `bench/`. Numbers were taken on an Intel
+Xeon @ 2.10 GHz, g++ 13.3 `-O2`, Python 3.11 with numpy 2.4.
+
+### Local controller vs other DWA implementations
+
+Four implementations, same dynamic window, same trajectory count, same 25-step
+horizon. Baselines are fetched by `bench/fetch_baselines.sh`, not vendored.
+
+| Trajectories | This repo (C++) | [CppRobotics](https://github.com/onlytailei/CppRobotics) (C++) | [goktug97](https://github.com/goktug97/DynamicWindowApproach) (C) | [PythonRobotics](https://github.com/AtsushiSakai/PythonRobotics) (Py) |
+| ---: | ---: | ---: | ---: | ---: |
+| 36 | **0.011 ms** | 0.013 ms | 0.091 ms | 2.30 ms |
+| 100 | **0.030 ms** | 0.032 ms | 0.303 ms | 7.16 ms |
+| 400 | **0.120 ms** | 0.142 ms | 1.353 ms | 33.84 ms |
+| 900 | **0.275 ms** | 0.315 ms | 3.159 ms | 78.25 ms |
+| 2,500 | **0.760 ms** | 0.884 ms | 8.950 ms | 219.36 ms |
+
+Read the middle column first. Against another C++ DWA this repo is within
+10–20 percent — near parity, not a win. Most of the 60× over PythonRobotics is
+Python versus C++, and most of the 8–12× over goktug97 is that it walks a point
+cloud per sample where this repo does an O(1) costmap lookup.
+
+That lookup is the one structural difference, and it shows up as flat scaling
+in clutter (Python side, 400 trajectories):
+
+| Obstacles | This repo | PythonRobotics |
+| ---: | ---: | ---: |
+| 20 | 0.64 ms | 29.40 ms |
+| 500 | 0.64 ms | 68.17 ms |
+| 2,000 | 0.64 ms | **326.99 ms** |
+
+Flat versus linear. A costmap has to be built and maintained, so this is a
+trade rather than a free win.
+
+ROS-coupled implementations (`nav2_dwb_controller`, `amslabtech/dwa_planner`,
+`teb_local_planner`) are not in the table: they need a live ROS 2 graph and
+costmap plugins to run at all, so any number taken outside that would be
+measuring the harness. The Nav2 comparison below uses their published figures
+instead.
+
+### Global planner vs Nav2
+
+Reference numbers are Table I of Macenski et al., [*Cost-Aware Kinematically
+Feasible Planning for Mobile and Surface Robotics*](https://arxiv.org/abs/2401.13078),
+which benchmarks the Nav2 Smac Planners against NavFn and SBPL ARA* on
+10,000 m² random occupancy maps at 5 cm resolution with 1,000 start-goal pairs.
+`bench/nav2_maps.py` rebuilds that map and query geometry (2000 × 2000 cells,
+100 × 100 m, ~50 m paths) so the timings measure comparable work.
+
+| Obstacle density | This repo, C++ A\* | Nav2 Smac 2D-A\* | Nav2 NavFn | Nav2 Hybrid-A\* |
+| ---: | ---: | ---: | ---: | ---: |
+| 10% | **5.0 ms** | 66.2 ms | 71.1 ms | 39.1 ms |
+| 15% | **6.8 ms** | 85.6 ms | 66.5 ms | 40.7 ms |
+| 20% | **15.1 ms** | 88.8 ms | 61.0 ms | 38.8 ms |
+
+**Read that with the caveats.** Their CPU (Ryzen 5 5600X) is considerably faster
+than the one these numbers came off, which flatters this repo. Against that,
+Nav2's Smac 2D-A\* is cost-aware and returns a smoothed path, and NavFn solves a
+full navigation function — both do more work per call than a plain octile A\*.
+The honest claim is that this planner is in the same order of magnitude on
+equivalent maps, not that it beats Nav2.
+
+`python3 bench/nav2_compare.py`
+
 
 ## Dependencies
 
