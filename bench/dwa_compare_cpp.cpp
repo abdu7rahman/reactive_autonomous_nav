@@ -11,6 +11,7 @@
 
 double bench_cpprobotics(int side, int reps, int n_obstacles);
 double bench_goktug(int side, int reps, int n_obstacles);
+double bench_amslabtech(int side, int reps, int n_obstacles);
 
 #include <algorithm>
 #include <chrono>
@@ -84,8 +85,8 @@ int main(int argc, char** argv) {
             MAP[(size_t)(r + a) * NW + (c + b)] = (int8_t)254;
     }
 
-    printf("\n  %13s %14s %16s %16s\n", "trajectories", "this repo",
-           "CppRobotics", "goktug97 (C)");
+    printf("\n  %13s %14s %16s %16s %16s\n", "trajectories", "this repo",
+           "CppRobotics", "goktug97 (C)", "amslabtech");
     for (int side : {6, 10, 20, 30, 50}) {
         double lax = 5.0, lay = 5.0;
         mine_sweep(side, lax, lay);
@@ -99,9 +100,10 @@ int main(int argc, char** argv) {
         }
         double mb = bench_cpprobotics(side, reps, 60);
         double mc = bench_goktug(side, reps, 60);
+        double md = bench_amslabtech(side, reps, 60);
         std::sort(a.begin(), a.end());
         double ma = a[a.size()/2];
-        printf("  %13d %13.3fms %15.3fms %15.3fms\n", n, ma, mb, mc);
+        printf("  %13d %13.3fms %15.3fms %15.3fms %15.3fms\n", n, ma, mb, mc, md);
     }
     printf("\n");
     return 0;

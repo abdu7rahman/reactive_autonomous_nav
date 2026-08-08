@@ -1,6 +1,8 @@
 *.pyc
 __pycache__/
 bench/*.bin
+bench/.km_dwa.py
+bench/.km_robot_config.py
 bench/.pr_dwa.py
 bench/.third_party/
 bench/bench_astar
