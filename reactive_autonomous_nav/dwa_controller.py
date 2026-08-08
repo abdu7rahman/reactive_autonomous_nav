@@ -59,7 +59,7 @@ class DWAControllerNode(Node):
         self.heading_cost_gain  = 5.0
         self.speed_cost_gain    = 0.5
         self.obstacle_cost_gain = 5.0
-        self.lookahead_wps      = 3
+        self.lookahead_wps      = 8      # ~0.4 m on a plan at costmap resolution
         self.goal_tol           = 0.15
         self.wp_tol             = 0.25
 
@@ -269,10 +269,27 @@ class DWAControllerNode(Node):
         obs_cost = np.minimum(10.0, pen.sum(axis=1) / T * 10.0)
 
         # ── heading cost ─────────────────────────────────────────────
-        end_x     = x[:, -1]
-        end_y     = y[:, -1]
-        end_theta = theta[:, -1]
-        diff = np.arctan2(gy_odom - end_y, gx_odom - end_x) - end_theta
+        # Scored where the trajectory *arrives*, not where it ends up.
+        #
+        # Reading the bearing at the last rollout sample is the textbook
+        # formulation and it has a pathology whenever the goal is nearer than
+        # the rollout reaches. The horizon spans predict_time * max_vel =
+        # 1.25 m; the lookahead waypoint sits about 0.4 m out. Any trajectory
+        # fast enough to get there flies past it, the bearing from its endpoint
+        # back to the goal inverts, and heading -> 0. The controller settles
+        # where v * predict_time ~ the lookahead distance, so it holds
+        # 0.10-0.14 m/s down a clear straight line with a 0.50 m/s limit and
+        # nothing in front of it -- measured on an empty 4.25 x 1.50 m field.
+        #
+        # Truncating at the first sample inside wp_tol removes the penalty
+        # without adding a gain to trade off: every trajectory that reaches the
+        # waypoint now scores near 1.0, and the speed term breaks the tie in
+        # favour of the one that gets there soonest.
+        reach = np.hypot(x - gx_odom, y - gy_odom) <= self.wp_tol
+        idx   = np.where(reach.any(axis=1), reach.argmax(axis=1), T - 1)
+        rows  = np.arange(N)
+        diff = np.arctan2(gy_odom - y[rows, idx],
+                          gx_odom - x[rows, idx]) - theta[rows, idx]
         diff = np.arctan2(np.sin(diff), np.cos(diff))
         heading = 1.0 - np.abs(diff) / np.pi
 
@@ -487,9 +504,16 @@ class DWAControllerNode(Node):
         self._record_pose(mx, my)
 
         # ── advance waypoint ─────────────────────────────────────────
+        # Proximity alone strands the tracker: a waypoint the robot flew past
+        # without ever coming within wp_tol is never retired, so it spends the
+        # rest of the run steering at a point behind itself. Retiring one whose
+        # successor is already nearer makes the advance monotonic in the robot's
+        # progress along the plan rather than in how close it happened to pass.
         while self.wp_idx < len(self.current_path) - 1:
-            wp = self.current_path[self.wp_idx].pose.position
-            if np.hypot(wp.x - mx, wp.y - my) < self.wp_tol:
+            cur = self.current_path[self.wp_idx].pose.position
+            nxt = self.current_path[self.wp_idx + 1].pose.position
+            d_cur = np.hypot(cur.x - mx, cur.y - my)
+            if d_cur < self.wp_tol or np.hypot(nxt.x - mx, nxt.y - my) < d_cur:
                 self.wp_idx += 1
             else:
                 break
@@ -505,14 +529,13 @@ class DWAControllerNode(Node):
             return
 
         # ── lookahead goal (map frame) ───────────────────────────────
-        # Deliberately short. The rollout reaches predict_time * max_vel, so a
-        # target that far out lets fast constant-arc trajectories win -- and in
-        # anything tighter than an open room those arcs end in a wall, the
-        # tracker stops advancing its waypoint and the recovery behaviour takes
-        # over. Measured on bench/test_dwa_window.py's maps: pushing the target
-        # from 0.4 m to 1.0 m raises the top speed from 0.22 to 0.46 m/s and
-        # the path-length ratio from 1.05 to 2.36, and the goal is never
-        # reached. Close tracking beats a high top speed here.
+        # A waypoint count rather than a distance, so it tracks the plan's
+        # resolution -- fine here because every global planner in this package
+        # emits at costmap resolution, which puts eight waypoints at ~0.4 m.
+        # Swept on bench/test_dwa_window.py's maps: 3 tracks the maze tightly
+        # (1.02x plan length) but oscillates across open rooms (1.32x); 12 is
+        # the reverse (1.01x rooms, 1.13x maze and 74% slower); 16 never
+        # finishes the maze. Eight holds both under 1.09x.
         tidx   = min(self.wp_idx + self.lookahead_wps,
                      len(self.current_path) - 1)
         gx_map = self.current_path[tidx].pose.position.x

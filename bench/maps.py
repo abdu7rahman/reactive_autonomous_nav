@@ -152,13 +152,15 @@ def maze(cells=12, cell_px=10, wall=2, seed=0):
     return g, start, goal
 
 
-def rooms(n=200, seed=3, door=18):
+def rooms(n=200, seed=3, door=18, clear_crossings=False):
     """Open space broken by long walls with offset doorways.
 
-    door is the opening width in cells. The default is fine for scoring a
-    global planner, which is a point. A controller carrying a footprint needs
-    a wider one: inflating the jambs by the inscribed radius eats door - 2*r,
-    and a doorway that lands on a crossing wall is narrower still.
+    door is the opening width in cells, and clear_crossings keeps a doorway
+    from landing on a wall that crosses it. The defaults reproduce the map the
+    global planners were scored on and are left alone for that reason; a
+    controller carrying a footprint needs both, because inflating the jambs by
+    the inscribed radius eats door - 2*r and a doorway split by a crossing wall
+    is narrower still.
     """
     rng = np.random.default_rng(seed)
     g = np.full((n, n), FREE, dtype=np.int16)
@@ -173,10 +175,10 @@ def rooms(n=200, seed=3, door=18):
     g[:, x - 2:x + 2] = LETHAL
     for _ in range(3):                      # several doorways so the split stays passable
         d = int(rng.integers(8, n - door - 8))
-        # keep the opening clear of a crossing wall, which would halve it
-        for y in ys:
-            if d - 6 < y < d + door + 6:
-                d = min(n - door - 8, y + 8)
+        if clear_crossings:
+            for y in ys:
+                if d - 6 < y < d + door + 6:
+                    d = min(n - door - 8, y + 8)
         g[d:d + door, x - 2:x + 2] = FREE
     return g, (5, 5), (n - 6, n - 6)
 
@@ -269,7 +271,7 @@ def controller_suite():
     out.append((f"maze-wide-{g.shape[0]}", g, s, gl))
     seed = 0
     while True:
-        g, s, gl = rooms(200, seed=seed, door=30)
+        g, s, gl = rooms(200, seed=seed, door=30, clear_crossings=True)
         if passable(g, s, gl):
             out.append(("rooms-200", g, s, gl)); break
         seed += 1
