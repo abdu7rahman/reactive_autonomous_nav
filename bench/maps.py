@@ -152,22 +152,34 @@ def maze(cells=12, cell_px=10, wall=2, seed=0):
     return g, start, goal
 
 
-def rooms(n=200, seed=3):
-    """Open space broken by long walls with offset doorways."""
+def rooms(n=200, seed=3, door=18, clear_crossings=False):
+    """Open space broken by long walls with offset doorways.
+
+    door is the opening width in cells, and clear_crossings keeps a doorway
+    from landing on a wall that crosses it. The defaults reproduce the map the
+    global planners were scored on and are left alone for that reason; a
+    controller carrying a footprint needs both, because inflating the jambs by
+    the inscribed radius eats door - 2*r and a doorway split by a crossing wall
+    is narrower still.
+    """
     rng = np.random.default_rng(seed)
     g = np.full((n, n), FREE, dtype=np.int16)
     g[0, :] = g[-1, :] = g[:, 0] = g[:, -1] = LETHAL
-    for k in range(1, 5):
-        y = k * n // 5
+    ys = [k * n // 5 for k in range(1, 5)]
+    for y in ys:
         g[y - 2:y + 2, :] = LETHAL
         for _ in range(2):
-            d = int(rng.integers(8, n - 26))
-            g[y - 2:y + 2, d:d + 18] = FREE
+            d = int(rng.integers(8, n - door - 8))
+            g[y - 2:y + 2, d:d + door] = FREE
     x = 2 * n // 3
     g[:, x - 2:x + 2] = LETHAL
     for _ in range(3):                      # several doorways so the split stays passable
-        d = int(rng.integers(8, n - 26))
-        g[d:d + 18, x - 2:x + 2] = FREE
+        d = int(rng.integers(8, n - door - 8))
+        if clear_crossings:
+            for y in ys:
+                if d - 6 < y < d + door + 6:
+                    d = min(n - door - 8, y + 8)
+        g[d:d + door, x - 2:x + 2] = FREE
     return g, (5, 5), (n - 6, n - 6)
 
 
@@ -186,13 +198,20 @@ def hard_suite():
     return out
 
 
-def inflate(g, radius_cells=4, lethal=LETHAL):
+def inflate(g, radius_cells=4, lethal=LETHAL, inscribed_cells=0):
     """Costmap inflation, the way nav2_costmap_2d's inflation layer works.
 
     Lethal cells keep their value; cells within radius get a cost that decays
     with distance. Without this a global planner hugs walls and any
     path-tracking controller with a lookahead clips the corner -- which is a
     property of the map, not of the controller.
+
+    inscribed_cells reproduces the other half of that layer, the one that
+    matters to a local controller: nav2 raises every cell closer than the
+    robot's inscribed radius to lethal, which is what makes a centre-point
+    collision check equivalent to a footprint check. Leave it at 0 for the
+    global planners -- they are scored on paths, and a lethal band that thick
+    closes corridors the robot can physically drive through.
     """
     g = g.copy()
     h, w = g.shape
@@ -219,10 +238,15 @@ def inflate(g, radius_cells=4, lethal=LETHAL):
     band = (~lethal_mask) & (dist <= radius_cells)
     scaled = (AVOID_COST_INFLATE * np.exp(-1.2 * dist)).astype(np.int16)
     g[band] = np.maximum(g[band], scaled[band])
+    if inscribed_cells:
+        g[(~lethal_mask) & (dist <= inscribed_cells)] = lethal
     return g
 
 
 AVOID_COST_INFLATE = 240
+
+
+INSCRIBED_CELLS = 3        # 0.15 m at 0.05 m/cell, a TurtleBot4's inscribed radius
 
 
 def controller_suite():
@@ -232,14 +256,24 @@ def controller_suite():
     local controller: its corridors are 0.5 m across, narrower than a
     TurtleBot4 plus the 0.4 m lookahead pure pursuit steers at. Comparing a
     tracker against a gap it cannot physically turn in measures the map.
+
+    Reachability is checked against the inscribed band, not the raw walls, so
+    every map here is passable by something with a footprint rather than by a
+    point.
     """
+    def passable(g, s, gl):
+        return reachable(inflate(g.astype(np.int16), radius_cells=4,
+                                 inscribed_cells=INSCRIBED_CELLS), s, gl)
+
     out = []
     g, s, gl = maze(cells=6, cell_px=22, wall=3, seed=2)
+    assert passable(g, s, gl), "maze-wide closed by the inscribed band"
     out.append((f"maze-wide-{g.shape[0]}", g, s, gl))
     seed = 0
     while True:
-        g, s, gl = rooms(200, seed=seed)
-        if reachable(g, s, gl):
+        g, s, gl = rooms(200, seed=seed, door=30, clear_crossings=True)
+        if passable(g, s, gl):
             out.append(("rooms-200", g, s, gl)); break
         seed += 1
+        assert seed < 60, "no rooms seed survives the inscribed band"
     return out

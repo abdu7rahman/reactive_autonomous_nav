@@ -59,7 +59,7 @@ class DWAControllerNode(Node):
         self.heading_cost_gain  = 5.0
         self.speed_cost_gain    = 0.5
         self.obstacle_cost_gain = 5.0
-        self.lookahead_wps      = 3
+        self.lookahead_wps      = 8      # ~0.4 m on a plan at costmap resolution
         self.goal_tol           = 0.15
         self.wp_tol             = 0.25
 
@@ -184,6 +184,19 @@ class DWAControllerNode(Node):
             min( self.max_yawrate,  w + self.max_dyawrate * self.dt),
         ]
 
+    @staticmethod
+    def _samples(lo, hi, res):
+        """Inclusive samples across [lo, hi], never empty, never past hi.
+
+        np.arange(lo, hi + res, res) gets both ends wrong: it admits one
+        sample beyond hi (so the command can exceed max_vel or the clearance
+        cap), and it returns nothing at all when hi < lo, which happens every
+        time an external cap is applied below the window's own floor.
+        """
+        if hi <= lo:
+            return np.array([lo])
+        return np.linspace(lo, hi, int(round((hi - lo) / res)) + 1)
+
     # ================================================================
     #  Vectorised costmap helpers
     # ================================================================
@@ -256,10 +269,27 @@ class DWAControllerNode(Node):
         obs_cost = np.minimum(10.0, pen.sum(axis=1) / T * 10.0)
 
         # ── heading cost ─────────────────────────────────────────────
-        end_x     = x[:, -1]
-        end_y     = y[:, -1]
-        end_theta = theta[:, -1]
-        diff = np.arctan2(gy_odom - end_y, gx_odom - end_x) - end_theta
+        # Scored where the trajectory *arrives*, not where it ends up.
+        #
+        # Reading the bearing at the last rollout sample is the textbook
+        # formulation and it has a pathology whenever the goal is nearer than
+        # the rollout reaches. The horizon spans predict_time * max_vel =
+        # 1.25 m; the lookahead waypoint sits about 0.4 m out. Any trajectory
+        # fast enough to get there flies past it, the bearing from its endpoint
+        # back to the goal inverts, and heading -> 0. The controller settles
+        # where v * predict_time ~ the lookahead distance, so it holds
+        # 0.10-0.14 m/s down a clear straight line with a 0.50 m/s limit and
+        # nothing in front of it -- measured on an empty 4.25 x 1.50 m field.
+        #
+        # Truncating at the first sample inside wp_tol removes the penalty
+        # without adding a gain to trade off: every trajectory that reaches the
+        # waypoint now scores near 1.0, and the speed term breaks the tie in
+        # favour of the one that gets there soonest.
+        reach = np.hypot(x - gx_odom, y - gy_odom) <= self.wp_tol
+        idx   = np.where(reach.any(axis=1), reach.argmax(axis=1), T - 1)
+        rows  = np.arange(N)
+        diff = np.arctan2(gy_odom - y[rows, idx],
+                          gx_odom - x[rows, idx]) - theta[rows, idx]
         diff = np.arctan2(np.sin(diff), np.cos(diff))
         heading = 1.0 - np.abs(diff) / np.pi
 
@@ -274,19 +304,28 @@ class DWAControllerNode(Node):
                 x, y, scores, lethal_hit, N, T)
 
     # ================================================================
-    #  Forward clearance (3-ray cone)
+    #  Forward clearance
     # ================================================================
     def _forward_clearance(self, ox, oy, otheta) -> float:
-        min_clear = float('inf')
-        for angle_off in [-0.3, 0.0, 0.3]:
-            a = otheta + angle_off
-            for d in np.arange(0.1, 2.0, 0.05):
-                c = self._costmap_value(ox + d * np.cos(a),
-                                        oy + d * np.sin(a))
-                if c >= LETHAL_COST:
-                    min_clear = min(min_clear, d)
-                    break
-        return min_clear
+        """Free distance straight ahead of the robot.
+
+        Three rays fanned out at ±0.3 rad measured the range to whatever those
+        rays happened to hit rather than the room in front of the robot: in a
+        straight corridor, being 0.1 m off-centre put a side wall 0.6 m down
+        the angled ray and throttled the robot to 0.18 m/s with metres of clear
+        floor ahead of it.
+
+        The centre line is the right query and the consistent one. The costmap
+        carries the inscribed band, which is what makes a centre-point lethal
+        check a footprint check -- it is how _score_trajectories reads the map
+        two calls later, and widening the scan by the robot radius on top of it
+        asks for twice the robot's width of clearance.
+        """
+        ca, sa = math.cos(otheta), math.sin(otheta)
+        for d in np.arange(0.1, 2.0, 0.05):
+            if self._costmap_value(ox + d * ca, oy + d * sa) >= LETHAL_COST:
+                return float(d)
+        return float('inf')
 
     # ================================================================
     #  Stuck detection / recovery
@@ -297,20 +336,33 @@ class DWAControllerNode(Node):
         p0, p1 = self.position_history[0], self.position_history[-1]
         return np.hypot(p1[0] - p0[0], p1[1] - p0[1]) < self.stuck_threshold
 
-    def _recovery(self):
+    def _recovery(self, ox, oy, otheta):
+        """Spin toward open space, then nudge forward only if there is any.
+
+        This used to run entirely open loop: alternate the spin direction, then
+        command +0.1 m/s for ten ticks with no costmap check. The one situation
+        it exists to handle is an obstacle in front of the robot, so the
+        unconditional push drove into the thing that caused the stall.
+        """
         self.recovery_timer += 1
         t = Twist()
-        if self.recovery_timer <= 20:
+
+        if self.recovery_timer == 1:
+            left  = self._forward_clearance(ox, oy, otheta + math.pi / 2.0)
+            right = self._forward_clearance(ox, oy, otheta - math.pi / 2.0)
+            self.recovery_dir = 1.0 if left >= right else -1.0
+
+        if self.recovery_timer <= 20 or self._forward_clearance(ox, oy, otheta) < 0.35:
             t.angular.z = 0.8 * self.recovery_dir
         else:
             t.linear.x = 0.1
-            if self.recovery_timer >= 30:
-                self.recovery_mode  = False
-                self.recovery_timer = 0
-                self.recovery_dir   = -self.recovery_dir
-                self.position_history.clear()
-                self.replan_pub.publish(String(data='replan'))
-                self.get_logger().info('Recovery done — requesting replan')
+
+        if self.recovery_timer >= 30:
+            self.recovery_mode  = False
+            self.recovery_timer = 0
+            self.position_history.clear()
+            self.replan_pub.publish(String(data='replan'))
+            self.get_logger().info('Recovery done — requesting replan')
         self.cmd_pub.publish(t)
 
     # ================================================================
@@ -452,9 +504,16 @@ class DWAControllerNode(Node):
         self._record_pose(mx, my)
 
         # ── advance waypoint ─────────────────────────────────────────
+        # Proximity alone strands the tracker: a waypoint the robot flew past
+        # without ever coming within wp_tol is never retired, so it spends the
+        # rest of the run steering at a point behind itself. Retiring one whose
+        # successor is already nearer makes the advance monotonic in the robot's
+        # progress along the plan rather than in how close it happened to pass.
         while self.wp_idx < len(self.current_path) - 1:
-            wp = self.current_path[self.wp_idx].pose.position
-            if np.hypot(wp.x - mx, wp.y - my) < self.wp_tol:
+            cur = self.current_path[self.wp_idx].pose.position
+            nxt = self.current_path[self.wp_idx + 1].pose.position
+            d_cur = np.hypot(cur.x - mx, cur.y - my)
+            if d_cur < self.wp_tol or np.hypot(nxt.x - mx, nxt.y - my) < d_cur:
                 self.wp_idx += 1
             else:
                 break
@@ -470,6 +529,13 @@ class DWAControllerNode(Node):
             return
 
         # ── lookahead goal (map frame) ───────────────────────────────
+        # A waypoint count rather than a distance, so it tracks the plan's
+        # resolution -- fine here because every global planner in this package
+        # emits at costmap resolution, which puts eight waypoints at ~0.4 m.
+        # Swept on bench/test_dwa_window.py's maps: 3 tracks the maze tightly
+        # (1.02x plan length) but oscillates across open rooms (1.32x); 12 is
+        # the reverse (1.01x rooms, 1.13x maze and 74% slower); 16 never
+        # finishes the maze. Eight holds both under 1.09x.
         tidx   = min(self.wp_idx + self.lookahead_wps,
                      len(self.current_path) - 1)
         gx_map = self.current_path[tidx].pose.position.x
@@ -491,7 +557,7 @@ class DWAControllerNode(Node):
             self.recovery_mode  = True
             self.recovery_timer = 0
         if self.recovery_mode:
-            self._recovery()
+            self._recovery(ox, oy, otheta)
             return
 
         # ── forward clearance cap ────────────────────────────────────
@@ -499,13 +565,15 @@ class DWAControllerNode(Node):
         v_cap = 0.08 if fwd < 0.35 else (0.18 if fwd < 0.7 else self.max_vel)
 
         # ── dynamic window ───────────────────────────────────────────
+        # The cap trims the reachable top speed; it cannot push the window
+        # below the floor set by max_accel. Closing on an obstacle at 0.30 m/s
+        # used to leave dw = [0.26, 0.08] and command a dead stop -- the one
+        # velocity the base cannot actually produce.
         dw = self._dynamic_window()
-        dw[1] = min(dw[1], v_cap)
+        dw[1] = max(dw[0], min(dw[1], v_cap))
 
-        vs = np.arange(dw[0], dw[1] + self.vel_res,     self.vel_res)
-        ws = np.arange(dw[2], dw[3] + self.yawrate_res,  self.yawrate_res)
-        if vs.size == 0:
-            vs = np.array([0.0])
+        vs = self._samples(dw[0], dw[1], self.vel_res)
+        ws = self._samples(dw[2], dw[3], self.yawrate_res)
 
         # ── vectorised scoring ───────────────────────────────────────
         (best_v, best_w, best_score,
