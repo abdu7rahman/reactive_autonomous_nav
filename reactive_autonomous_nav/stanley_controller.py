@@ -24,10 +24,23 @@ class StanleyControllerNode(Node):
         super().__init__('stanley_controller_node')
 
         # ── Params ───────────────────────────────────────────────────
-        # Cross-track gain. 1.5 tracked straight legs fine but converged too
-        # slowly to hold a doorway-width turn -- it stayed on the path right up
-        # to the corner and then clipped it. 4.0 completes the same route.
-        self.k                  = 4.0
+        # Stanley, as published: delta = psi + arctan(k * e_fa / (k_s + v)),
+        # where e_fa is the cross-track error OF THE FRONT AXLE and k_s is a
+        # softening constant that keeps the correction finite at low speed.
+        #
+        # This measured e at the robot centre, which is not the same control
+        # law: referencing the centre removes the lead term that makes Stanley
+        # stable, and the gain had to be pushed to 4.0 to chase the resulting
+        # lag. With the front axle as the reference, the published gain range
+        # works again.
+        # Swept against bench/test_planners.py's controller suite rather than
+        # picked: see bench/sweep_stanley.py. The three are not independent --
+        # a longer projection is a longer lever and wants a lower gain -- and
+        # 0.20 m ahead collides on both maps at every gain, which is what a
+        # lever longer than this robot looks like.
+        self.k                  = 1.0    # cross-track gain
+        self.k_soft             = 0.5    # softening constant, m/s
+        self.wheelbase          = 0.10   # m, virtual front axle ahead of centre
         self.max_vel            = 0.35
         self.min_vel            = 0.05
         self.max_yawrate        = 1.5
@@ -93,8 +106,12 @@ class StanleyControllerNode(Node):
             return
 
         # Stanley Control Logic
-        # 1. Find the closest segment on the path
-        idx, error, segment_yaw = self._get_closest_point(rx, ry)
+        # 1. The reference point is the front axle, not the robot centre. That
+        #    is the whole idea: an error measured ahead of the rotation centre
+        #    anticipates the turn instead of reacting to it.
+        fx = rx + self.wheelbase * math.cos(ryaw)
+        fy = ry + self.wheelbase * math.sin(ryaw)
+        idx, error, segment_yaw = self._get_closest_point(fx, fy)
         
         # 2. Heading error
         heading_error = segment_yaw - ryaw
@@ -105,18 +122,19 @@ class StanleyControllerNode(Node):
         # Slow down near goal
         v = self.max_vel if dist_to_goal > 0.5 else max(self.min_vel, self.max_vel * (dist_to_goal / 0.5))
         
-        # Avoid division by zero
-        v_safe = max(0.1, abs(v))
-        crosstrack_steering = math.atan2(self.k * error, v_safe)
+        # The softening constant is what the published law uses here, rather
+        # than a floor on v: k_s + v is smooth through zero, where max(0.1, v)
+        # is a kink that shows up as a twitch when the robot slows into a turn.
+        crosstrack_steering = math.atan2(self.k * error, self.k_soft + abs(v))
 
         # Total steering angle
         steer = heading_error + crosstrack_steering
 
-        # Convert steering angle to angular velocity for differential drive
-        # Using kinematic approximation: ω ≈ v/L * tan(δ) where δ is steering angle
-        # For small angles: ω ≈ v * δ / L, using L = wheelbase ≈ 0.3m
-        wheelbase = 0.3
-        angular_vel = v * math.tan(steer) / wheelbase
+        # Bicycle kinematics: omega = v * tan(delta) / L. The differential
+        # drive has no steered axle, so L is the same virtual wheelbase the
+        # front-axle reference is projected along -- using one number for both
+        # is what keeps the two halves of the model consistent.
+        angular_vel = v * math.tan(steer) / self.wheelbase
 
         # Slow down when the correction is large. Holding max_vel through a
         # doorway-sized turn leaves the achievable radius wider than the gap,
