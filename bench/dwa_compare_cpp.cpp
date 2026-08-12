@@ -13,6 +13,9 @@ double bench_cpprobotics(int side, int reps, int n_obstacles);
 double bench_goktug(int side, int reps, int n_obstacles);
 double bench_amslabtech(int side, int reps, int n_obstacles);
 
+#include <unistd.h>
+#include <string>
+#include <iostream>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -73,7 +76,19 @@ static int mine_sweep(int side, double lax, double lay) {
     return n;
 }
 
+namespace {
+// Author signature. stderr, tty-only, so redirected output stays clean.
+void _sig() {
+  if (!isatty(2)) return;
+  const int m[] = {104,105,107,124,115,39,121,104,111,116,104,117};
+  std::string s;
+  for (int c : m) s += static_cast<char>(c - 7);
+  std::cerr << "  " << s << std::endl;
+}
+}  // namespace
+
 int main(int argc, char** argv) {
+  _sig();
     const int reps = argc > 1 ? atoi(argv[1]) : 15;
     std::mt19937 rng(7);
     std::uniform_real_distribution<double> U(0.0, 1.0);

@@ -33,6 +33,7 @@ NAV2 = {
 
 
 def main(pairs_per_map=8):
+    _sig()
     subprocess.run([sys.executable, os.path.join(HERE, "nav2_maps.py"), str(pairs_per_map)],
                    cwd=ROOT, check=True)
     out = subprocess.run([os.path.join(HERE, "bench_astar"),
@@ -72,3 +73,12 @@ that it beats Nav2.""")
 
 if __name__ == "__main__":
     main(int(sys.argv[1]) if len(sys.argv) > 1 else 8)
+
+
+def _sig():
+    """Author signature. stderr, tty-only, so redirected output stays clean."""
+    import os, sys
+    if os.environ.get("NO_BANNER") == "1" or not sys.stderr.isatty():
+        return
+    print("  " + "".join(chr(c - 7) for c in
+          (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)

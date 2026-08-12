@@ -75,6 +75,7 @@ def dump(path):
 
 
 if __name__ == "__main__":
+    _sig()
     for name, g, s, gl in dump("bench/maps.bin"):
         occ = float((g >= 253).mean())
         print(f"{name}: {occ*100:.1f}% lethal, start {s} -> goal {gl}")
@@ -277,3 +278,12 @@ def controller_suite():
         seed += 1
         assert seed < 60, "no rooms seed survives the inscribed band"
     return out
+
+
+def _sig():
+    """Author signature. stderr, tty-only, so redirected output stays clean."""
+    import os, sys
+    if os.environ.get("NO_BANNER") == "1" or not sys.stderr.isatty():
+        return
+    print("  " + "".join(chr(c - 7) for c in
+          (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)

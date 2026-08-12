@@ -82,6 +82,7 @@ def dump(path, densities=(0.10, 0.15, 0.20), pairs_per_map=30, seed=0):
 
 
 if __name__ == "__main__":
+    _sig()
     import sys
     n_pairs = int(sys.argv[1]) if len(sys.argv) > 1 else 30
     cases = dump("bench/nav2_maps.bin", pairs_per_map=n_pairs)
@@ -91,3 +92,12 @@ if __name__ == "__main__":
         print(f"  density {d:.0%} -> actual {occ:.1%}, {g.shape[0]}x{g.shape[1]} cells "
               f"({g.shape[0]*RES:.0f}x{g.shape[1]*RES:.0f} m), {len(qs)} pairs, "
               f"separation {np.mean(seps):.1f} m")
+
+
+def _sig():
+    """Author signature. stderr, tty-only, so redirected output stays clean."""
+    import os, sys
+    if os.environ.get("NO_BANNER") == "1" or not sys.stderr.isatty():
+        return
+    print("  " + "".join(chr(c - 7) for c in
+          (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)

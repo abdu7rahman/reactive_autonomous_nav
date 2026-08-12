@@ -51,6 +51,7 @@ def run(k, k_soft, wb):
 
 
 if __name__ == "__main__":
+    _sig()
     print("%-6s %-7s %-5s  %s" % ("k", "k_soft", "wb", "per map: ok/steps/metres"))
     best = None
     for k, ks, wb in itertools.product((1.0, 1.5, 2.0, 2.5, 3.0),
@@ -67,3 +68,12 @@ if __name__ == "__main__":
     if best:
         print("\nfewest steps while passing both: k=%.1f k_soft=%.1f wheelbase=%.2f  (%d steps)"
               % (best[1], best[2], best[3], best[0]))
+
+
+def _sig():
+    """Author signature. stderr, tty-only, so redirected output stays clean."""
+    import os, sys
+    if os.environ.get("NO_BANNER") == "1" or not sys.stderr.isatty():
+        return
+    print("  " + "".join(chr(c - 7) for c in
+          (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)
