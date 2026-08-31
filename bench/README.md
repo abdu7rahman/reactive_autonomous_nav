@@ -8,7 +8,15 @@ python3 bench/test_planners.py     # correctness, ~8 min
 python3 bench/dwa_compare.py       # vs PythonRobotics DWA
 python3 bench/nav2_compare.py      # vs Nav2 Smac Planner paper
 ./bench/run.sh                     # Python vs C++ latency
+
+python3 bench/sweep_stanley.py     # Stanley's k, k_soft, wheelbase
+python3 bench/sweep_teb.py         # TEB's acceleration edges and vertex spacing
+python3 bench/sweep_mppi.py        # MPPI's temperature, against effective sample size
 ```
+
+The sweeps exist because a controller that carries a published name should
+carry its published constants, and picking those by eye is how Stanley's gain
+ended up at 4.0 compensating for a reference point in the wrong place.
 
 Nothing is reimplemented. `rig.py` stubs `rclpy` and the message packages just
 far enough for the modules to import, then builds each node with
@@ -46,10 +54,37 @@ Every one of these was live before the suite existed.
 | Pure Pursuit | Lookahead scanned from index 0 | Once a lookahead from the start, the start itself qualified — the robot **turned around and chased its own path start** |
 | Stanley | Closest-point search scanned the whole path | Could snap the reference onto an earlier leg |
 | TEB | Elastic band built once from the head of the path, never advanced | Robot orbited waypoint 2 forever |
+| TEB | Band carried no time intervals at all — the velocity came from `min(max_vel, dist * 2.0)` against band index 2 | Commanded speed was a function of how finely the plan happened to be sampled rather than of any limit the robot has. 39–41% more steps than the timed band needs |
+| MPPI | Softmax `lambda` fixed at 0.3 while the critics sum to about 300 | `exp(-300/0.3)` collapses the weighting onto one rollout: effective sample size **1.00 of 1000**, which is random shooting, not MPPI. Reverse commands appeared in 19 of 20 chase runs |
+| bench | `_sig()` called above its own definition in every entry point | `test_planners.py` — the suite that gates a push — died with `NameError` before printing a line |
 
 A\* came through clean: zero true corner-cuts across every map, and the 14
 diagonal steps that squeeze past one blocked orthogonal are legal for a point
 robot on an inflated costmap.
+
+## MPPI's temperature has an optimum, which is the point
+
+Once `lambda` is scaled to the units of the cost, `temperature` is a ratio and
+the weighting has somewhere sensible to sit. Effective sample size is
+`1 / sum(w^2)` — how many of the 1000 rollouts the update actually averages
+over. One is argmin; a thousand is the prior with the costs ignored.
+
+| temperature | effective samples | steps over both maps |
+| ---: | ---: | ---: |
+| 0.05 | 1.0 | 1125 |
+| 0.10 | 2.0 | 1108 |
+| **0.30** | **34.4** | **1082** |
+| 0.60 | 210.9 | 1119 |
+| 1.00 | 493.9 | 1163 |
+
+It degrades at both ends and the interior minimum sits where the effective
+sample size is a few dozen. That shape is the corroboration: before the units
+were fixed there was no optimum to find, because every temperature in this range
+collapsed to a single sample and the controller was doing the same thing at all
+of them.
+
+Every row passes both maps, so the suite's pass/fail says nothing here — which
+is why `sweep_mppi.py` prints the effective sample size beside the step count.
 
 ## Known bounds, not bugs
 
