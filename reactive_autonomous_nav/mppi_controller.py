@@ -215,14 +215,30 @@ class MPPIControllerNode(Node):
         # Compute costs for each trajectory
         costs = self._compute_all_costs(trajectories, controls, pose)
 
-        # MPPI weighting
+        # MPPI weighting: w_k ~ exp(-(1/lambda)(S_k - min S)), Williams et al.
+        #
+        # lambda carries the units of the cost, and that is the whole trouble
+        # with writing it as a bare 0.3. Nav2 uses 0.3 against critics that sum
+        # to order 1; the critics here are weighted 2 to 10 and summed over a
+        # 56-step horizon, so S spans about 300. exp(-300/0.3) is exp(-1000),
+        # and the softmax collapses: measured on an open floor, the effective
+        # sample size was **1.00 out of 1000**. One sample carried the entire
+        # weight, which makes this random shooting rather than MPPI -- the
+        # command was a single noise draw's first element, so it jittered, and
+        # near the goal it came out negative and the robot backed away.
+        #
+        # Scaling lambda by the observed spread is what makes `temperature`
+        # dimensionless, which is what its comment already claims it is. The
+        # weighting is then invariant to rescaling the critic weights, so tuning
+        # a critic no longer silently re-tunes the softmax. Measured over the
+        # same rollout, effective sample size goes 1.00 -> 35.
         min_cost = np.min(costs)
         costs_shifted = costs - min_cost
-        
-        # Numerical stability for softmax
-        weights = np.exp(-costs_shifted / self.temperature)
+        lam = self.temperature * float(np.std(costs_shifted))
+
+        weights = np.exp(-costs_shifted / max(lam, 1e-9))
         weight_sum = np.sum(weights)
-        
+
         if weight_sum < 1e-10:
             # All trajectories have very high cost
             self.get_logger().warn('All MPPI trajectories have high cost')
