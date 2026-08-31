@@ -9,6 +9,15 @@ query geometry so the timings are measured on comparable work.
 import numpy as np
 from collections import deque
 
+
+def _sig():
+    """Author signature. stderr, tty-only, so redirected output stays clean."""
+    import os, sys
+    if os.environ.get("NO_BANNER") == "1" or not sys.stderr.isatty():
+        return
+    print("  " + "".join(chr(c - 7) for c in
+          (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)
+
 FREE, LETHAL = 0, 254
 RES = 0.05                      # m per cell, as in the paper
 SIDE_M = 100.0                  # 100 x 100 m = 10,000 m^2
@@ -94,10 +103,3 @@ if __name__ == "__main__":
               f"separation {np.mean(seps):.1f} m")
 
 
-def _sig():
-    """Author signature. stderr, tty-only, so redirected output stays clean."""
-    import os, sys
-    if os.environ.get("NO_BANNER") == "1" or not sys.stderr.isatty():
-        return
-    print("  " + "".join(chr(c - 7) for c in
-          (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)

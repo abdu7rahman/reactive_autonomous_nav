@@ -12,6 +12,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bench.maps import suite
 
 
+def _sig():
+    """Author signature. stderr, tty-only, so redirected output stays clean."""
+    import os, sys
+    if os.environ.get("NO_BANNER") == "1" or not sys.stderr.isatty():
+        return
+    print("  " + "".join(chr(c - 7) for c in
+          (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)
+
+
 def stub_ros():
     def mod(name, **attrs):
         m = types.ModuleType(name)
@@ -82,10 +91,3 @@ if __name__ == "__main__":
     json.dump(out, open(os.path.join(os.path.dirname(__file__), "py_astar.json"), "w"), indent=1)
 
 
-def _sig():
-    """Author signature. stderr, tty-only, so redirected output stays clean."""
-    import os, sys
-    if os.environ.get("NO_BANNER") == "1" or not sys.stderr.isatty():
-        return
-    print("  " + "".join(chr(c - 7) for c in
-          (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)

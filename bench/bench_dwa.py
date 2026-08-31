@@ -11,6 +11,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from bench.maps import dump_local
 from bench.bench_astar import stub_ros
 
+
+def _sig():
+    """Author signature. stderr, tty-only, so redirected output stays clean."""
+    import os, sys
+    if os.environ.get("NO_BANNER") == "1" or not sys.stderr.isatty():
+        return
+    print("  " + "".join(chr(c - 7) for c in
+          (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)
+
 DT, PREDICT, VEL_RES, YAW_RES = 0.1, 2.5, 0.02, 0.04
 MAX_VEL, MAX_YAW, MAX_ACC, MAX_DYAW = 0.50, 2.00, 0.40, 1.00
 
@@ -62,10 +71,3 @@ if __name__ == "__main__":
     json.dump(main(), open(os.path.join(os.path.dirname(__file__), "py_dwa.json"), "w"), indent=1)
 
 
-def _sig():
-    """Author signature. stderr, tty-only, so redirected output stays clean."""
-    import os, sys
-    if os.environ.get("NO_BANNER") == "1" or not sys.stderr.isatty():
-        return
-    print("  " + "".join(chr(c - 7) for c in
-          (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)
