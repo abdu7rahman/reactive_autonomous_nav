@@ -212,6 +212,26 @@ class DWAControllerNode(Node):
             return -1
         return int(self.costmap_data[row, col])
 
+    def _segment_clear(self, x0, y0, x1, y1) -> bool:
+        """Is the straight line between two world points free of lethal cells?
+
+        Sampled at half a cell. Bresenham would walk a thin line and skip cells
+        the segment really passes through, which is the bug the global planners
+        in this package were fixed for; at half the cell pitch no cell the
+        segment crosses can be stepped over.
+        """
+        if self.costmap_info is None:
+            return True
+        step = self.costmap_info.resolution * 0.5
+        dist = math.hypot(x1 - x0, y1 - y0)
+        n = max(2, int(dist / step) + 1)
+        for i in range(n + 1):
+            t = i / n
+            if self._costmap_value(x0 + (x1 - x0) * t,
+                                   y0 + (y1 - y0) * t) >= LETHAL_COST:
+                return False
+        return True
+
     def _batch_costmap(self, x_all, y_all):
         """
         Vectorised costmap lookup.
@@ -538,6 +558,24 @@ class DWAControllerNode(Node):
         # finishes the maze. Eight holds both under 1.09x.
         tidx   = min(self.wp_idx + self.lookahead_wps,
                      len(self.current_path) - 1)
+        # ...clamped to a waypoint the robot can actually see.
+        #
+        # A fixed count assumes the plan runs roughly away from the robot, and
+        # where it wraps an obstacle it does not: on maze-wide-153 the route
+        # rounds the tip of a pillar at x = 2.45, so from waypoint 73 the eighth
+        # waypoint ahead sits on the *far side* of that wall. The controller
+        # steered at it, drove into the near face, and stalled there for six
+        # hundred steps -- 4.57 m from the goal with a clear route to it.
+        #
+        # Walking back to the furthest visible waypoint is what pure pursuit
+        # does for the same reason. The near ones stay reachable, so a plan that
+        # does not double back is unaffected and the swept lookahead of eight
+        # still applies wherever it is honest.
+        while tidx > self.wp_idx:
+            tp = self.current_path[tidx].pose.position
+            if self._segment_clear(mx, my, tp.x, tp.y):
+                break
+            tidx -= 1
         gx_map = self.current_path[tidx].pose.position.x
         gy_map = self.current_path[tidx].pose.position.y
         self._publish_goal_marker(gx_map, gy_map)

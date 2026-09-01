@@ -54,6 +54,7 @@ Every one of these was live before the suite existed.
 | Pure Pursuit | Lookahead scanned from index 0 | Once a lookahead from the start, the start itself qualified — the robot **turned around and chased its own path start** |
 | Stanley | Closest-point search scanned the whole path | Could snap the reference onto an earlier leg |
 | TEB | Elastic band built once from the head of the path, never advanced | Robot orbited waypoint 2 forever |
+| DWA | Lookahead was a fixed waypoint count, so where the plan wrapped an obstacle it aimed at a waypoint on the far side of the wall | Drove into the near face of a pillar and sat there for 600 steps, **4.57 m from a reachable goal**. Clamping the lookahead to a *visible* waypoint also took rooms-200 from 827 steps to 469 |
 | TEB | Band carried no time intervals at all — the velocity came from `min(max_vel, dist * 2.0)` against band index 2 | Commanded speed was a function of how finely the plan happened to be sampled rather than of any limit the robot has. 39–41% more steps than the timed band needs |
 | MPPI | Softmax `lambda` fixed at 0.3 while the critics sum to about 300 | `exp(-300/0.3)` collapses the weighting onto one rollout: effective sample size **1.00 of 1000**, which is random shooting, not MPPI. Reverse commands appeared in 19 of 20 chase runs |
 | bench | `_sig()` called above its own definition in every entry point | `test_planners.py` — the suite that gates a push — died with `NameError` before printing a line |

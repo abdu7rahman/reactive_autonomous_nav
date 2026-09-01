@@ -116,12 +116,16 @@ def controllers(name, g, start, goal):
     assert ok, f"reference path is itself invalid: {why}"
 
     rows = []
-    # dwa is excluded from the closed-loop rollout: it reads map and odom as
+    # dwa used to be excluded here, on the grounds that it reads map and odom as
     # separate frames and preprocesses the plan into its own waypoint queue,
-    # which this single-frame plant does not model. Its rollout and scoring are
-    # timed directly in bench_dwa.py and bench/dwa_compare*.
+    # which this single-frame plant does not model. The frames were never the
+    # problem: the rig aligns map and odom, which is what they are before
+    # localisation drifts, and dwa reads that correctly. What actually stopped
+    # it was steering at a lookahead waypoint on the far side of a wall, and it
+    # is scored here now so that cannot come back unnoticed.
     for module, extra in (("pure_pursuit_controller", {}),
                           ("stanley_controller", {}),
+                          ("dwa_controller", {}),
                           ("teb_controller", {}),
                           ("mppi_controller", {})):
         node = object.__new__(rig.node_class(rig.load(module)))
