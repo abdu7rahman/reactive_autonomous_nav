@@ -12,6 +12,7 @@ python3 bench/nav2_compare.py      # vs Nav2 Smac Planner paper
 python3 bench/sweep_stanley.py     # Stanley's k, k_soft, wheelbase
 python3 bench/sweep_teb.py         # TEB's acceleration edges and vertex spacing
 python3 bench/sweep_mppi.py        # MPPI's temperature, against effective sample size
+python3 bench/chase_mppi.py       # the site's cursor-chase plate, both weightings
 ```
 
 The sweeps exist because a controller that carries a published name should
@@ -86,6 +87,40 @@ of them.
 
 Every row passes both maps, so the suite's pass/fail says nothing here — which
 is why `sweep_mppi.py` prints the effective sample size beside the step count.
+
+## The chase demo's two symptoms were not one bug
+
+The site's cursor chase showed MPPI reversing at the start and settling 0.33 m
+out against a 0.15 m goal tolerance. Neither reproduced on the controller
+suite, whose maps are 153 and 200 cells wide and whose reference path is
+decimated by two. The chase is an 86x44 plate at 0.05 m a cell and hands the
+controller the raw A\* cell path, one waypoint every five centimetres.
+`chase_mppi.py` rebuilds those conditions, and they turn out to be two
+different things.
+
+**The reversal was the softmax.** Running the version from before
+`fix(mppi): scale the softmax temperature to the units of the cost` against the
+version after it, on the same five goals and the same seed:
+
+| goal | wps | min commanded v, before | after |
+| --- | --- | --- | --- |
+| (2.50, 1.10) | 39 | **−0.229** m/s | +0.066 |
+| (1.50, 1.10) | 19 | **−0.211** | +0.041 |
+| (1.20, 1.60) | 12 | **−0.158** | −0.011 |
+| (3.40, 0.60) | 57 | **−0.089** | +0.027 |
+| (1.00, 1.10) | 9 | **−0.044** | +0.068 |
+
+Every goal reverses before the fix and none of them meaningfully does after.
+The −0.089 m/s row is the figure the symptom was first reported at.
+
+**The 0.33 m was the plate's goal snap, not the controller.** A cursor inside
+the inflation band is moved to the nearest cell at or below `FREE_COST` before
+A\* sees it. Against nav2's exponential falloff at a four-cell radius, the
+first such cell is five cells from a wall, so a cursor in a corner moves the
+goal by up to **0.346 m** — and the robot then arrives at the goal it was
+given while the readout measures to the cursor. Any controller shows it. The
+demo now names the offset instead of reporting a tolerance it is not measuring
+against.
 
 ## Known bounds, not bugs
 
@@ -176,6 +211,7 @@ the accel-limited window the controller actually evaluates, down to 4× at
 | `rig.py` | ROS stubs, node loader, path validators, closed-loop driver |
 | `maps.py` | Mazes, room maps, costmap inflation |
 | `test_planners.py` | The correctness suite |
+| `chase_mppi.py` | The site's chase plate: both MPPI weightings, and the goal snap |
 | `dwa_compare.py` | vs PythonRobotics |
 | `nav2_maps.py`, `nav2_compare.py` | vs the Nav2 Smac Planner paper |
 | `bench_astar.*`, `bench_dwa.*` | Python vs C++ latency |
