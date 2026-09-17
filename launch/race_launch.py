@@ -18,6 +18,11 @@ deliberately.
 Nothing here serves a map or runs a localiser. The costmaps roll with the
 robot, the transform into `map` is the spawn pose rather than an estimate of
 it, and the only obstacles on the straight are the other four robots.
+
+sim/race_timer.py sends the goals, one per robot, each the same distance
+directly ahead of the robot that gets it. Equal distances are as fair as a
+grid gets; they are not the same thing as an equal race, because r3 in the
+middle has a neighbour on each side and r1 and r5 on the outside have one.
 """
 
 from launch import LaunchDescription
@@ -26,9 +31,11 @@ from ament_index_python.packages import get_package_share_directory
 import os
 import tempfile
 
-# lane x, controller. Lanes are 1.3 m apart: the robot is 0.34 m across and
+# lane, controller. Lanes are 1.3 m apart: the robot is 0.34 m across and
 # carries a 0.30 m inflation, so anything tighter starts the race with every
-# robot already inside its neighbour's forbidden zone.
+# robot already inside its neighbour's forbidden zone. The lane x values live
+# in sim/race_up.sh, which spawns them, and in sim/race_timer.py, which places
+# each goal directly ahead of the robot that gets it.
 GRID = [
     ('r1', -2.6, 'dwa_controller'),
     ('r2', -1.3, 'pure_pursuit_controller'),
@@ -36,12 +43,6 @@ GRID = [
     ('r4',  1.3, 'teb_controller'),
     ('r5',  2.6, 'mppi_controller'),
 ]
-
-# Where the robots start and which way they point, matching race_up.sh. The
-# goal is straight ahead of each of them by the same distance, so the grid slot
-# cannot flatter anyone: nobody is given a shorter run or a cleaner line.
-START_Y = 1.0
-RACE_LENGTH = 6.0
 
 VIZ = ['/astar_markers', '/astar_explored', '/astar_status', '/replan_request',
        '/driven_path', '/controller_status', '/dwa_trajectories',
@@ -75,7 +76,7 @@ def generate_launch_description():
     pkg = get_package_share_directory('reactive_autonomous_nav')
     ld = LaunchDescription()
 
-    for ns, x, controller in GRID:
+    for ns, _lane, controller in GRID:
         frames = {'map_frame': 'map',
                   'odom_frame': f'{ns}/odom',
                   'base_frame': f'{ns}/base_link'}
