@@ -141,11 +141,12 @@ echo "    sim ${C0}s to ${C1}s over ${WALL}s wall -> playing back ${SPEED}x"
 # would cost megabytes for nothing.  The controller logs "Goal REACHED" with a
 # wall stamp; T0 is the wall time the capture began.
 END=""
-# "Goal REACHED" is dwa_controller's own wording.  The other four publish
-# REACHED on their status topic without logging that string, so matching only
-# it reported a finished pure_pursuit run as reached: 0 and left its clip
-# untrimmed.  What all five share is the planner's reply to that status.
-REACH_T=$(grep -m1 -E "Goal REACHED|stopping replanning" "$JOB/nav.log" 2>/dev/null \
+# Four controllers, four different arrival strings: dwa logs "Goal REACHED",
+# pure_pursuit and mppi "Goal reached!", teb "TEB: Goal reached", stanley
+# none at all.  Matching dwa's alone reported finished runs as reached: 0
+# and left their clips untrimmed at the full capture window.  The planner's
+# reply to the status message covers stanley; the rest are matched directly.
+REACH_T=$(grep -m1 -E "Goal REACHED|Goal reached|stopping replanning" "$JOB/nav.log" 2>/dev/null \
           | grep -oE "\[[0-9]{10}\.[0-9]+\]" | tr -d "[]")
 if [ -n "$REACH_T" ]; then
   END=$(python3 -c "print(f'{max(8.0, $REACH_T - $T0 + 4):.1f}')")
@@ -162,6 +163,6 @@ ffmpeg -loglevel error -y $TRIM -i "$RUN/$TAG.mp4" -vf \
 
 # start() writes each process's output beside its pid file
 cp -f "$JOB/nav.log" "$RUN/log/$TAG.nav.log" 2>/dev/null
-hits=$(grep -cE "Goal REACHED|stopping replanning" "$RUN/log/$TAG.nav.log" 2>/dev/null)
+hits=$(grep -cE "Goal REACHED|Goal reached|stopping replanning" "$RUN/log/$TAG.nav.log" 2>/dev/null)
 echo "    goal reached: ${hits:-0}"
 ls -la "$G/gif/$TAG.gif" 2>/dev/null | awk '{printf "    gif %.1f MB\n", $5/1048576}'
