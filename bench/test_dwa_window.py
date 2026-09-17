@@ -22,6 +22,7 @@ import os
 import sys
 
 import numpy as np
+from collections import deque
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from bench import maps, rig                                        # noqa: E402
@@ -93,6 +94,41 @@ def yawrate_symmetry():
 
 
 # ── 2. the controller against a plant ────────────────────────────────
+def orbit_detection():
+    """Does _is_stuck see a robot driving a circle?
+
+    A robot orbiting its own lookahead point makes no progress toward its goal
+    and is, for every purpose that matters, stuck -- but it is moving, so a
+    detector that only measures displacement over its history window says it
+    is fine. That is what the detector used to do, and what two recorded runs
+    did for a hundred seconds each: 0.18 m/s at 0.9 rad/s, which sweeps 4.5 rad
+    over the fifty-tick window and covers 0.32 m of chord against a 3 cm
+    threshold.
+
+    Returns (chord, orbit_caught, progress_spared), and the thresholds are
+    checked by the caller so the numbers land in the report.
+    """
+    node = fresh()
+    R, w, dt = 0.2, 0.9, 0.1
+
+    node.position_history = deque(maxlen=50)
+    for k in range(50):
+        a = w * dt * k
+        node.position_history.append((R * math.cos(a), R * math.sin(a), 9))
+    p0, p1 = node.position_history[0], node.position_history[-1]
+    chord = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
+    caught = bool(node._is_stuck())
+
+    # A robot crawling past an obstacle at 0.05 m/s still advances a waypoint
+    # every five ticks, and must not be called stuck.
+    node.position_history = deque(maxlen=50)
+    for k in range(50):
+        node.position_history.append((0.005 * k, 0.0, 9 + k // 5))
+    spared = not node._is_stuck()
+
+    return chord, caught, spared
+
+
 def reference_path(grid, start, goal):
     an = object.__new__(rig.node_class(rig.load("astar_planner")))
     rig.apply_defaults(an, "astar_planner")
@@ -141,6 +177,14 @@ def main():
     sym = yawrate_symmetry()
     fails += sym
     print(f"  yaw-rate window: {'in bounds at every current rate' if not sym else str(sym) + ' out of bounds'}")
+
+    chord, caught, spared = orbit_detection()
+    fails += (not caught) + (not spared)
+    print(f"\nSTUCK DETECTION -- a robot that moves and gets nowhere")
+    print(f"  a 0.2 m orbit at 0.9 rad/s covers {chord:.2f} m of chord over the "
+          f"window, against a {fresh().stuck_threshold:.2f} m displacement threshold")
+    print(f"  orbit called stuck: {'yes' if caught else 'NO'};  "
+          f"0.05 m/s crawl spared: {'yes' if spared else 'NO'}")
 
     print("\nCLOSED LOOP -- the node's own _control_loop against a unicycle plant")
     print("  costmap carries the inscribed band, so the node's centre-point")

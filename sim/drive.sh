@@ -26,7 +26,26 @@ G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 export DISPLAY=:99
 
 PLANNER=$1; CONTROLLER=$2; TAG=$3; WALL=${4:-190}
-GX=${GX:-2.0}; GY=${GY:--3.2}
+# The goal, and why it is not (2.0, -3.2) any more.
+#
+# The route from the warehouse origin has to cross a shelf band that runs from
+# y = -1.6 to y = -2.0 and ends at x = 1.7, so the robot goes east and then
+# south through the gap past its corner.  Measured on the warehouse's own
+# occupancy map, clearance to the nearest occupied or unknown cell along that
+# crossing:
+#
+#   x     1.8   2.0   2.2   2.4   2.6   2.8   3.0
+#   m    0.06  0.27  0.48  0.66  0.87  1.08  1.26
+#
+# At x = 2.0 that is 0.27 m. The robot is 0.34 m across, so its edge passes
+# 0.05 m from the shelf, and the costmap's 0.45 m inflation makes every cell
+# on the crossing expensive. Nine of nine clips got through it once, which is
+# the surprising half; later batches lost five of ten to DWA orbiting the
+# corner. 2.6 crosses with 0.87 m -- more than the robot radius plus the whole
+# inflation radius, so no cell on the route is inflated at all -- for a route
+# 4.12 m long instead of 3.77 m. Same shelf, same costmap interaction, a gap
+# the robot fits through.
+GX=${GX:-2.6}; GY=${GY:--3.2}
 RUN=$G/run; JOB=$RUN/job; mkdir -p "$JOB" "$RUN/log"
 trap 'stop $JOB/*.pid' EXIT
 

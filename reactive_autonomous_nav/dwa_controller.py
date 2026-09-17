@@ -118,11 +118,16 @@ class DWAControllerNode(Node):
         # fourteen ticks to stop, and by then it has driven a circle. Runs that
         # never reached their goal looked exactly like that.
         #
-        # Measured on bench/test_planners.py: maze-wide-153 325 -> 306 steps
-        # and 12.82 -> 12.33 m, rooms-200 469 -> 456 steps and 21.13 -> 20.90 m.
-        # Fewer steps and a shorter path on both. Keeping the sampling
-        # resolution: coarsening it to hold the rollout count down (0.03 and
-        # 0.15) measured worse than either, 396 and 586 steps.
+        # Measured on bench/test_planners.py, steps and metres, with the
+        # sampler in its final form (see _samples):
+        #
+        #                   maze-wide-153        rooms-200
+        #   0.4, 1.0        325 / 12.82 m      469 / 21.13 m
+        #   0.9, 7.725      307 / 12.18 m      461 / 20.90 m
+        #
+        # Fewer steps and a shorter path on both maps. Keeping the sampling
+        # resolution: coarsening it to 0.03 and 0.15 to hold the rollout count
+        # down measured worse than either setting, 396 and 586 steps.
         self.max_accel          = 0.9
         self.max_dyawrate       = 7.725
         self.vel_res            = 0.02
@@ -205,6 +210,11 @@ class DWAControllerNode(Node):
         self.goal_reached  = False
         self.recovery_mode = False
         self.best_mid      = 0
+        # The history is about progress on the current path.  Left in place
+        # across a replan it carries the old path's waypoint indices, and the
+        # new path's index starts at zero, so _is_stuck would read the reset as
+        # a lack of progress and go into recovery on a plan one tick old.
+        self.position_history.clear()
 
         map_pose = self._get_tf(self.map_frame, self.base_frame)
         if map_pose is not None:
@@ -270,10 +280,37 @@ class DWAControllerNode(Node):
         sample beyond hi (so the command can exceed max_vel or the clearance
         cap), and it returns nothing at all when hi < lo, which happens every
         time an external cap is applied below the window's own floor.
+
+        A lattice of multiples of res, plus the two bounds, rather than
+        linspace across the span.  linspace with a rounded count gives a gap
+        wider than res whenever the span is not a whole number of res -- a
+        0.09 m span at 0.02 m rounds to four intervals and samples every
+        0.0225 m -- which went unnoticed while the window was 0.08 m wide and
+        the arithmetic came out even, and which four of the twenty-seven cases
+        in bench/test_dwa_window.py reported once the window was widened to
+        the robot's own acceleration. Using ceil for the count fixes the gap
+        but re-spaces every sample whenever a clamp moves either bound, so the
+        clearance cap re-quantises the whole window on each tick and the chosen
+        speed jitters with it. Measured on rooms-200: the lattice is 461 steps
+        and 20.90 m, ceil-linspace 491 and 22.23, and the round-linspace this
+        replaces 456 and 20.90 -- so the lattice buys the twenty-seven sound
+        windows for five steps, and ceil-linspace would have cost thirty-five
+        and 1.33 m.
+
+        On the lattice, interior gaps are exactly res and the two end gaps are
+        smaller, so the declared resolution holds; and a clamp drops candidates
+        instead of shifting them.
         """
         if hi <= lo:
             return np.array([lo])
-        return np.linspace(lo, hi, int(round((hi - lo) / res)) + 1)
+        k0 = math.ceil(lo / res - 1e-9)
+        k1 = math.floor(hi / res + 1e-9)
+        s = np.arange(k0, k1 + 1) * res if k1 >= k0 else np.empty(0)
+        if s.size == 0 or s[0] > lo + 1e-9:
+            s = np.r_[lo, s]
+        if s[-1] < hi - 1e-9:
+            s = np.r_[s, hi]
+        return s
 
     # ================================================================
     #  Vectorised costmap helpers
@@ -429,10 +466,29 @@ class DWAControllerNode(Node):
     #  Stuck detection / recovery
     # ================================================================
     def _is_stuck(self):
+        """No displacement, or no progress along the path.
+
+        The displacement half was the whole test, and it catches a robot
+        pressed against a wall while missing the one that matters more: a
+        robot driving a circle. Orbiting its own lookahead point at 0.18 m/s
+        and 0.9 rad/s -- which is what two recorded runs did, for a hundred
+        seconds each, with the planner replanning around them -- the robot
+        sweeps 4.5 rad over this fifty-tick window and covers 0.31 m of chord,
+        ten times the 3 cm threshold. The detector saw a robot travelling
+        perfectly well. It was travelling in a circle.
+
+        Waypoint progress is what reaching the goal actually depends on, so
+        that is the second half: fifty ticks, five simulated seconds, without
+        advancing a single 0.05 m waypoint while moving is stuck. A robot
+        genuinely crawling past an obstacle at 0.05 m/s still covers five
+        waypoints in that window.
+        """
         if len(self.position_history) < 50:
             return False
         p0, p1 = self.position_history[0], self.position_history[-1]
-        return np.hypot(p1[0] - p0[0], p1[1] - p0[1]) < self.stuck_threshold
+        if np.hypot(p1[0] - p0[0], p1[1] - p0[1]) < self.stuck_threshold:
+            return True
+        return p1[2] <= p0[2]
 
     def _recovery(self, ox, oy, otheta):
         """Spin toward open space, then nudge forward only if there is any.
@@ -610,10 +666,10 @@ class DWAControllerNode(Node):
 
         map_pose = self._get_tf(self.map_frame, self.base_frame)
         if map_pose is None:
-            # A silent return leaves the robot with no new command and the log with
-        # no reason: mppi_controller stopped dead at 3.44 m of a 6 m race
-        # this way and its entire log for the run was three lines. Stop and
-        # say so, throttled.
+            # A silent return leaves the robot with no new command and the
+            # log with no reason: mppi_controller stopped dead at 3.44 m of a
+            # 6 m race this way and its entire log for the run was three
+            # lines. Stop and say so, throttled.
             self.cmd_pub.publish(Twist())
             self.get_logger().warn(
                 f'No {self.map_frame} -> {self.base_frame} transform; holding',
@@ -624,7 +680,9 @@ class DWAControllerNode(Node):
         odom_pose = self._get_tf(self.odom_frame, self.base_frame)
         ox, oy, otheta = odom_pose if odom_pose else (mx, my, mtheta)
 
-        self.position_history.append((mx, my))
+        # The waypoint index rides along: _is_stuck needs to know whether the
+        # robot has made progress on the path, not just whether it has moved.
+        self.position_history.append((mx, my, self.wp_idx))
         self._record_pose(mx, my)
 
         # ── advance waypoint ─────────────────────────────────────────
@@ -724,17 +782,12 @@ class DWAControllerNode(Node):
              ox, oy, otheta, vs, ws, gx_odom, gy_odom)
 
         # ── publish scored trajectory markers ────────────────────────
-        # subsample trajectories for RViz if there are many
-        max_viz = 200
-        if N > max_viz:
-            viz_idx = np.linspace(0, N - 1, max_viz, dtype=int)
-            self._publish_scored_markers(
-                x_all[viz_idx], y_all[viz_idx],
-                scores[viz_idx], lethal_mask[viz_idx],
-                max_viz, T)
-        else:
-            self._publish_scored_markers(
-                x_all, y_all, scores, lethal_mask, N, T)
+        # The fan is capped in one place, inside the publisher: it strides the
+        # whole fan to self.traj_draw markers and colours them against the
+        # whole fan's score range. There used to be a second cap here as well,
+        # subsampling to 200 first, which normalised the colours against the
+        # subsample rather than the fan.
+        self._publish_scored_markers(x_all, y_all, scores, lethal_mask, N, T)
 
         # ── no feasible trajectory → escape ──────────────────────────
         if best_score == -np.inf:

@@ -275,10 +275,10 @@ class TEBControllerNode(Node):
 
         pose = self._get_tf(self.map_frame, self.base_frame)
         if pose is None:
-            # A silent return leaves the robot with no new command and the log with
-        # no reason: mppi_controller stopped dead at 3.44 m of a 6 m race
-        # this way and its entire log for the run was three lines. Stop and
-        # say so, throttled.
+            # A silent return leaves the robot with no new command and the
+            # log with no reason: mppi_controller stopped dead at 3.44 m of a
+            # 6 m race this way and its entire log for the run was three
+            # lines. Stop and say so, throttled.
             self.cmd_pub.publish(Twist())
             self.get_logger().warn(
                 f'No {self.map_frame} -> {self.base_frame} transform; holding',
