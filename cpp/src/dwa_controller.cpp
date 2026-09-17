@@ -89,7 +89,7 @@ public:
         pub_cmd_      = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel_unstamped", 10);
         pub_traj_     = create_publisher<visualization_msgs::msg::MarkerArray>("/dwa_trajectories", 10);
         pub_best_     = create_publisher<visualization_msgs::msg::MarkerArray>("/dwa_best_traj", 10);
-        pub_status_   = create_publisher<std_msgs::msg::String>("/dwa_status", 10);
+        pub_status_   = create_publisher<std_msgs::msg::String>("/controller_status", 10);
         pub_driven_   = create_publisher<nav_msgs::msg::Path>("/driven_path", 10);
 
         tf_buffer_    = std::make_shared<tf2_ros::Buffer>(get_clock());

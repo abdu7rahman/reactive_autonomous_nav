@@ -97,7 +97,7 @@ class AStarPlannerNode(Node):
                                  self._goal_cb,    10)
         self.create_subscription(String,        '/replan_request',
                                  self._replan_cb,  10)
-        self.create_subscription(String,        '/dwa_status',
+        self.create_subscription(String,        '/controller_status',
                                  self._status_cb,  10)
 
         # ── pubs ─────────────────────────────────────────────────────

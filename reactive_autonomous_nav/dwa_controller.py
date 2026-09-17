@@ -123,7 +123,7 @@ class DWAControllerNode(Node):
         self.traj_pub        = self.create_publisher(MarkerArray, '/dwa_trajectories',  10)
         self.best_traj_pub   = self.create_publisher(MarkerArray, '/dwa_best_traj',     10)
         self.goal_mrk        = self.create_publisher(Marker,      '/dwa_goal',          10)
-        self.status_pub      = self.create_publisher(String,      '/dwa_status',        10)
+        self.status_pub      = self.create_publisher(String,      '/controller_status',        10)
         self.driven_path_pub = self.create_publisher(Path,        '/driven_path',       10)
         self.replan_pub      = self.create_publisher(String,      '/replan_request',    10)
 
