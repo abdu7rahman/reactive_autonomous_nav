@@ -11,6 +11,7 @@ print(''.join(chr(x-7) for x in [104,105,107,124,115,39,121,104,111,116,104,117]
 import rclpy
 import rclpy.time
 import math
+import time
 import numpy as np
 from rclpy.node     import Node
 from rclpy.duration import Duration
@@ -79,6 +80,20 @@ class DWAControllerNode(Node):
     map_frame  = 'map'
     odom_frame = 'odom'
     base_frame = 'base_link'
+
+    # Loop-rate bookkeeping, so the log can say how many ticks a simulated
+    # second actually got.  The dynamic window is the measured yaw rate plus or
+    # minus max_dyawrate * dt = 0.1 rad/s per tick, and dt is 0.1 s because the
+    # timer is 10 Hz: at ten ticks a simulated second the yaw rate can swing
+    # 1 rad/s per second, and at two it can swing 0.2.  A controller that can
+    # only unwind a 1.4 rad/s turn over seven simulated seconds will have
+    # driven a circle first, which is what a run that never reached its goal
+    # looked like. Class-level, because bench/rig.py builds these nodes with
+    # object.__new__ and never runs __init__.
+    _tick_n = 0
+    _tick_sim = 0.0
+    _tick_hz = 0.0
+    _tick_ms = 0.0
 
     def __init__(self):
         super().__init__('dwa_controller_node')
@@ -544,6 +559,15 @@ class DWAControllerNode(Node):
     #  Main control loop
     # ================================================================
     def _control_loop(self):
+        t_tick = time.perf_counter()
+        now = self.get_clock().now().nanoseconds * 1e-9
+        self._tick_n += 1
+        if self._tick_sim <= 0.0:
+            self._tick_sim = now
+        elif now - self._tick_sim >= 1.0:
+            self._tick_hz = self._tick_n / (now - self._tick_sim)
+            self._tick_n, self._tick_sim = 0, now
+
         if self.current_pose is None or self.current_path is None:
             return
         if self.costmap_data is None:
@@ -712,10 +736,12 @@ class DWAControllerNode(Node):
                                      -self.max_yawrate, self.max_yawrate))
         self.cmd_pub.publish(t)
 
+        self._tick_ms = 1e3 * (time.perf_counter() - t_tick)
         self.get_logger().info(
             f'v={best_v:.2f} ω={best_w:.2f} fwd={fwd:.2f}m '
             f'wp={self.wp_idx}/{len(self.current_path)} '
-            f'dist={np.hypot(gx_map - mx, gy_map - my):.2f}m',
+            f'dist={np.hypot(gx_map - mx, gy_map - my):.2f}m '
+            f'tick={self._tick_ms:.0f}ms hz={self._tick_hz:.1f}',
             throttle_duration_sec=1.0)
 
 

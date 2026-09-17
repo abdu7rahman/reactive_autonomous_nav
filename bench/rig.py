@@ -288,7 +288,15 @@ def prepare(node):
     node.get_logger = lambda: types.SimpleNamespace(
         info=lambda *a, **k: None, warn=lambda *a, **k: None,
         error=lambda *a, **k: None, debug=lambda *a, **k: None)
-    stamp = types.SimpleNamespace(to_msg=lambda: types.SimpleNamespace(sec=0, nanosec=0))
+    # The clock stub carries both of the things a node asks a Time for: a
+    # message stamp and a nanosecond count.  It had only to_msg(), and the
+    # first node to read get_clock().now().nanoseconds -- dwa_controller,
+    # measuring how many ticks a simulated second actually got -- failed the
+    # whole suite with AttributeError on a SimpleNamespace. It does not
+    # advance: nothing in the bench is timed against it, and a stub that
+    # pretended to would be inventing a rate.
+    stamp = types.SimpleNamespace(
+        to_msg=lambda: types.SimpleNamespace(sec=0, nanosec=0), nanoseconds=0)
     node.get_clock = lambda: types.SimpleNamespace(now=lambda: stamp)
     # every `self.*_pub = self.create_publisher(...)` in __init__ becomes a sink,
     # read out of the source so a new publisher cannot break the harness
