@@ -124,21 +124,12 @@ fi
 start "$JOB/rviz.pid" rviz2 -d $G/nav.rviz --ros-args -p use_sim_time:=true
 sleep 35
 
-# /goal_pose is not latched and `pub --once` exits the moment it has written,
-# so a goal sent before the planner has finished building its subscription is
-# dropped with no error anywhere.  The first recorded run was 190 seconds of a
-# robot that had never been told where to go: RViz starting alongside the nav
-# stack slowed the planner's startup past the fixed sleep that used to be here.
-# The counts come from rclpy's graph API, not `ros2 topic info`: the CLI
-# reported 0 subscribers on runs whose planner demonstrably received the goal
-# and drove to it, so this loop burned its whole budget on every clip.
-subs=$(timeout 140 python3 $G/wait_subs.py /goal_pose 120 1 2>/dev/null | tail -1)
 # Publishers, not subscribers, on /cmd_vel_unstamped: the failure this catches
-# is a second one. Two controllers, two costmap pairs and an hour-old manual
-# publisher were once all writing to that topic at once, and the robot followed
-# the stale one.
+# is that two things are driving the robot.  Two controllers, two costmap pairs
+# and an hour-old manual publisher were once all writing to that topic at once,
+# and the robot followed the stale one.
 pubs=$(timeout 40 python3 $G/wait_subs.py /cmd_vel_unstamped 5 99 --publishers 2>/dev/null | tail -1)
-echo "    /goal_pose subscribers: ${subs:-0}, /cmd_vel_unstamped publishers: ${pubs:-?}"
+echo "    /cmd_vel_unstamped publishers: ${pubs:-?}"
 
 # Capture opens before the goal so the clip starts on a robot at rest and the
 # plan appears inside the recording.  1.2 frames a second of wall clock is
@@ -150,10 +141,23 @@ start "$JOB/ff.pid" ffmpeg -loglevel error -y -f x11grab -draw_mouse 0 \
       -video_size 912x624 -framerate 6 -i :99+366,65 -t "$WALL" "$RUN/$TAG.mp4"
 sleep 4
 
-ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
-  "{header: {frame_id: 'map'}, pose: {position: {x: $GX, y: $GY}, orientation: {w: 1.0}}}" \
-  > /dev/null 2>&1
-echo "    goal ($GX, $GY) sent; capturing ${WALL}s"
+# send_goal.py, not `ros2 topic pub --once`: /goal_pose is not latched and a
+# publisher that exits the moment it has written loses the message if matching
+# has not finished.  The wait for a subscriber that used to guard that was
+# worthless -- its header records the graph reporting zero subscribers through
+# five consecutive runs that all worked and one through the single run that
+# did not -- so this sends the goal and waits for the planner's own /plan,
+# which is the only evidence there is, and sends it again if none comes.
+#
+# The capture is already running, so a run that never gets a plan is stopped
+# here rather than recorded: the goal that went missing on planner-astar cost
+# 600 seconds of capture and produced a 57 kB gif of one still frame.
+if ! timeout 120 python3 $G/send_goal.py "$GX" "$GY" 90 2>&1 | sed 's/^/    /'; then
+  echo "    no plan for the goal -- aborting $TAG"
+  stop "$JOB/ff.pid"
+  exit 1
+fi
+echo "    capturing ${WALL}s"
 
 while [ -f "$JOB/ff.pid" ] && kill -0 "$(cat $JOB/ff.pid)" 2>/dev/null; do sleep 5; done
 rm -f "$JOB/ff.pid"

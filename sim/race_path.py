@@ -1,7 +1,7 @@
 """One reference path through the chicane, handed to all five controllers.
 
     race_path.py --check     measure it against the walls; the gate
-    race_path.py --dump      print the samples, lane-relative
+    race_path.py --draw      draw the lane, the bands and the path, in text
 
 On the straight each robot runs its own A* and the race is a nav stack against
 a nav stack.  On the chicane that is the wrong experiment: five A* runs on five
@@ -36,6 +36,7 @@ __author__ = "".join(
 )
 
 import math
+import signal
 import sys
 
 from reactive_autonomous_nav.race_course import (
@@ -260,15 +261,47 @@ def check():
     return 1 if bad else 0
 
 
+def draw(ns='r3', step=2, half=24):
+    """The lane as text: walls, the band they charge for, and the path.
+
+    Reading a table of 121 offsets does not tell you whether a slalom weaves;
+    looking at it does.  This is how the shape was checked before any of it
+    reached the simulator, and it is what showed the path threading the middle
+    of each corridor with the inflated band clear on both sides.
+    """
+    if not GATES:
+        print(f'course {COURSE} is a straight line')
+        return 0
+    at = {round(y, 2): dx for dx, y in centreline()}
+    lx = LANES[ns]
+    n = int(round(RACE_LENGTH / COSTMAP_RES))
+    print(f'  {ns} ({CONTROLLER[ns]}) lane: x offset across, course up the page')
+    print(f'  #  wall     :  inflated band     o  the reference path')
+    for i in range(n, -1, -step):
+        y = i * COSTMAP_RES
+        row = ''
+        for c in range(-half, half + 1):
+            dx = c * COSTMAP_RES
+            d = wall_distance(lx + dx, START_Y + y)
+            ch = '#' if d == 0.0 else (':' if d < INFLATION else ' ')
+            if abs(at[round(y, 2)] - dx) < COSTMAP_RES / 2:
+                ch = 'o' if ch == ' ' else 'X'
+            row += ch
+        mark = f'  y={y:4.1f}' if i % 20 == 0 else ''
+        print(f'  |{row}|{mark}')
+    return 0
+
+
 def main():
+    # `race_path.py --draw | head` is how the drawing gets read, and python's
+    # default SIGPIPE handling turns that into a traceback on the last line.
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     if '--check' in sys.argv[1:]:
         return check()
-    if '--dump' in sys.argv[1:]:
-        for dx, y in centreline():
-            print(f'{y:6.2f}\t{dx:+7.3f}')
-        return 0
+    if '--draw' in sys.argv[1:]:
+        return draw()
     print(__doc__.strip().splitlines()[0])
-    print('  --check | --dump')
+    print('  --check | --draw')
     return 2
 
 

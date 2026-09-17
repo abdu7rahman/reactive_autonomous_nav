@@ -2,8 +2,10 @@
 
     lifecycle_up.py [seconds_per_node] [node ...]
 
-With no node names it does the race's ten costmaps.  Any names given replace
-that list, which is how sim_up.sh brings the map server up.
+With no node names it does the race's costmaps: ten on the straight, and five
+on a course with gates, where no planner runs and nothing subscribes to a
+global costmap.  Any names given replace that list, which is how sim_up.sh
+brings the map server up and how drive.sh repairs a single robot's pair.
 
 `ros2 lifecycle set` does this job on a command line and cannot be relied on
 here at all: the CLI gives discovery about a second, and on this machine with
@@ -31,7 +33,7 @@ then four, then four of five pairs active; three full bringups in a row were
 thrown away that way.
 
 So: one node at a time, each transition retried, and a table at the end saying
-which of the ten are active.  Nothing here monitors the nodes afterwards,
+which of them are active.  Nothing here monitors the nodes afterwards,
 which the manager would -- but its bond monitoring was already switched off
 for this race, because with twenty-five nodes on four cores a missed heartbeat
 is a scheduling delay and the manager's answer to one is to tear the costmaps
@@ -51,11 +53,17 @@ from rclpy.node import Node
 from lifecycle_msgs.msg import Transition, State
 from lifecycle_msgs.srv import ChangeState, GetState
 
-from grid_tf import LANES
+from reactive_autonomous_nav.race_course import GATES, LANES
 
+# Only the local costmap on a gated course.  The controllers all read
+# /local_costmap/costmap and nothing reads the global one there -- no planner
+# is launched -- so five 20x20 m rolling grids with an obstacle layer and an
+# inflation layer each were being maintained for no subscriber, on four cores
+# already carrying five physics bodies and five raycast sensors.
 RACE_COSTMAPS = [f'/{ns}/{which}/{which}'
                  for ns in LANES
-                 for which in ('local_costmap', 'global_costmap')]
+                 for which in (('local_costmap',) if GATES
+                               else ('local_costmap', 'global_costmap'))]
 
 WANT = [(Transition.TRANSITION_CONFIGURE, State.PRIMARY_STATE_INACTIVE, 'configure'),
         (Transition.TRANSITION_ACTIVATE,  State.PRIMARY_STATE_ACTIVE,   'activate')]

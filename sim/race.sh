@@ -90,22 +90,31 @@ echo "    all five on the start line"
 # and three consecutive full bringups were thrown away by relaunching around
 # it.  Relaunching is still here as a second line, but it should now be rare
 # rather than routine.
+#
+# The status, not a grep for a count.  This used to test the output for
+# "costmaps active: 10/10", which lifecycle_up.py has never printed -- it
+# prints "active: 10/10" -- so the condition could not be true however well the
+# bringup went, and the next chicane race would have relaunched the whole stack
+# three times and aborted with ten live costmaps.  It exits non-zero unless
+# every node on its list reached active, which is the same question without a
+# number in it.  The output goes to a file rather than through `tee`, because a
+# pipeline's status is its last command's and tee always succeeds.
 up=0
 for attempt in 1 2 3; do
   start "$JOB/race.pid" ros2 launch reactive_autonomous_nav race_launch.py
   sleep 45
-  if timeout 900 python3 $G/lifecycle_up.py 30 2>&1 | tee "$JOB/costmaps.log" \
-     | grep -q "costmaps active: 10/10"; then
+  if timeout 900 python3 $G/lifecycle_up.py 30 > "$JOB/costmaps.log" 2>&1; then
     up=1
   fi
-  echo "    $(grep -m1 'costmaps active' "$JOB/costmaps.log" 2>/dev/null) (attempt $attempt)"
+  echo "    costmaps $(grep -m1 '^active:' "$JOB/costmaps.log" 2>/dev/null \
+        | sed 's/^active: //') (attempt $attempt)"
   [ "$up" = "1" ] && break
   grep FAILED "$JOB/costmaps.log" 2>/dev/null | sed 's/^/      /'
   stop "$JOB/race.pid"
   sleep 10
 done
 if [ "$up" != "1" ]; then
-  echo "    the ten costmaps never all activated -- aborting"
+  echo "    the costmaps never all activated -- aborting"
   exit 1
 fi
 

@@ -109,14 +109,20 @@ def generate_launch_description():
                       remappings=remaps(ns))
 
         cm_cfg = costmap_params(pkg, ns)
-        for which in ('local_costmap', 'global_costmap'):
+        # Only the local costmap when no planner is running: every controller
+        # in this package reads /local_costmap/costmap and none of them reads
+        # the global one, so on a gated course the five 20x20 m rolling global
+        # grids had no subscriber at all.
+        which_maps = ('local_costmap',) if GATES else ('local_costmap',
+                                                       'global_costmap')
+        for which in which_maps:
             # namespace is /<ns>/<which>, not /<ns>. nav2_costmap_2d puts its
             # lifecycle node inside a sub-namespace of its own name -- the
             # single-robot launch says namespace='local_costmap',
             # name='local_costmap' for the same reason -- so a node given only
             # /r1 comes up as /r1/local_costmap and the manager waits forever
             # on /r1/local_costmap/local_costmap/get_state, which is the name
-            # sim/costmap_up.py drives. It also puts the
+            # sim/lifecycle_up.py drives. It also puts the
             # published topics where the remappings expect them:
             # /r1/local_costmap/costmap, /r1/local_costmap/published_footprint.
             ld.add_action(Node(
@@ -133,5 +139,6 @@ def generate_launch_description():
             name=f'{controller}_node', **common))
 
     print(f'race_launch: course {COURSE}, {len(GRID)} robots, '
-          f'{"controllers only" if GATES else "planner + controller each"}')
+          f'{"controllers and local costmaps only" if GATES else
+             "planner, controller and both costmaps each"}')
     return ld
