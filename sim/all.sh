@@ -40,8 +40,17 @@ echo "controller-dwa: copied from planner-astar (same pair)" | tee -a $G/run/log
 
 echo
 echo "=== results ==="
-for f in $G/gif/*.gif; do
-  t=$(basename "$f" .gif)
-  r=$(grep -c "Goal REACHED" "$G/run/log/$t.nav.log" 2>/dev/null)
-  printf "%-26s %5s KB   reached=%s\n" "$t" "$(( $(stat -c%s "$f") / 1024 ))" "${r:-0}"
+# Four controllers, four arrival wordings -- the same pattern drive.sh trims
+# on.  Counting "Goal REACHED" alone is dwa's wording, and it reported the
+# other eight runs as reached=0 with their robots parked on the goal.
+#
+# gif/ also holds race.gif, which is not one of these ten.
+for p in planner-astar planner-theta_star planner-smac planner-rrt \
+         planner-rrt_smac_hybrid controller-dwa controller-pure_pursuit \
+         controller-stanley controller-teb controller-mppi; do
+  f=$G/gif/$p.gif
+  [ -s "$f" ] || { printf "%-26s missing\n" "$p"; continue; }
+  r=$(grep -cE "Goal REACHED|Goal reached|stopping replanning" \
+      "$G/run/log/$p.nav.log" 2>/dev/null)
+  printf "%-26s %5s KB   reached=%s\n" "$p" "$(( $(stat -c%s "$f") / 1024 ))" "${r:-0}"
 done

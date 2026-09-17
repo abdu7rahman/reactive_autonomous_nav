@@ -24,6 +24,16 @@
 G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . $G/lib.sh
 export DISPLAY=:99
+
+# Fast DDS over UDP only, for this race and nothing else.  fastdds_udp.xml
+# records what the shared-memory transport does to a fifty-participant graph
+# on this machine.  It was exported from lib.sh at first, which put it on the
+# single-robot runs too, and those are a fourteen-node graph whose global
+# costmap is a 1.68 MB message: the batch that followed had four of ten clips
+# fail to reach their goal, with the planner logging "Replan: path blocked by
+# local obstacle" at a shelf corner every earlier batch had driven past.  The
+# race needs it; one robot does not.
+export FASTRTPS_DEFAULT_PROFILES_FILE="$G/fastdds_udp.xml"
 # The overlay first: it carries the same description with the OAK-D stripped
 # out, and five depth cameras rendering through llvmpipe is most of the cost of
 # a frame and none of what these planners read.

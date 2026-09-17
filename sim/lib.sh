@@ -1,11 +1,6 @@
 # Shared helpers for the simulation harness.
 
 export PYTHONUNBUFFERED=1
-
-# Fast DDS over UDP only.  fastdds_udp.xml says what the shared-memory
-# transport does to a fifty-participant graph on this machine and how it was
-# measured; this is where every process in the harness picks the profile up.
-export FASTRTPS_DEFAULT_PROFILES_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fastdds_udp.xml"
 #
 # start <pidfile> <command...>
 #   `setsid cmd & echo $!` records setsid's own pid, and when setsid forks --
