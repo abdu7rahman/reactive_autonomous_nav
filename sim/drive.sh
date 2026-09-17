@@ -174,14 +174,26 @@ fi
 TRIM=""
 [ -n "$END" ] && TRIM="-t $END"
 
-# 48 colours is plenty for RViz's flat fills; 560 px keeps a ten-clip set to a
-# size a repository can carry and still reads at a glance.
+# 6 frames a second and 32 colours, measured on the longest of the ten -- a
+# 46-simulated-second rrt run, which is the worst case because the clips play
+# at the speed the robot actually moves:
+#
+#   fps 8, 48 colours   3.96 MB   (what this was)
+#   fps 6, 48 colours   3.14 MB
+#   fps 6, 32 colours   2.83 MB
+#   fps 6, 24 colours   2.70 MB
+#   fps 5, 48 colours   2.73 MB
+#
+# 32 is where the saving stops being free: at 24 the inflation gradient around
+# each obstacle starts to band, and that gradient is half of what a costmap
+# clip is showing. 560 px stays -- at 480 the robot is legible but stops
+# looking like a TurtleBot, which is the thing these clips are for.
 #
 # crop before scale: the capture window starts one pixel inside RViz's 3D
 # viewport, which puts its left and right dock-splitter handles in the frame as
 # a few coloured pixels at each edge that look like world geometry and are not.
 ffmpeg -loglevel error -y $TRIM -i "$RUN/$TAG.mp4" -vf \
-  "crop=880:616:16:0,setpts=PTS/$SPEED,fps=8,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=48[p];[s1][p]paletteuse=dither=none" \
+  "crop=880:616:16:0,setpts=PTS/$SPEED,fps=6,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=32[p];[s1][p]paletteuse=dither=none" \
   -loop 0 "$G/gif/$TAG.gif" < /dev/null
 
 # start() writes each process's output beside its pid file
