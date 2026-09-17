@@ -80,6 +80,15 @@ for attempt in 1 2 3; do
   start "$JOB/nav.pid" ros2 launch reactive_autonomous_nav nav_launch.py \
         planner:="$PLANNER" controller:="$CONTROLLER" use_sim_time:=true
   sleep 20
+  # Repair the pair the launch's own nav2_lifecycle_manager may have given up
+  # on.  The manager treats one failed transition as final -- it logs "Failed
+  # to bring up all requested nodes. Aborting bringup" and never retries --
+  # and it lost all three attempts of one run here, the same failure the race
+  # hit ten costmaps at a time. lifecycle_up.py reads each node's state first,
+  # so it is a no-op when the manager won and a repair when it did not.
+  timeout 220 python3 $G/lifecycle_up.py 30 \
+      /local_costmap/local_costmap /global_costmap/global_costmap \
+      2>&1 | sed 's/^/    /'
   if timeout 120 python3 $G/wait_topic.py /global_costmap/costmap OccupancyGrid 100 10000; then
     up=1
     break
