@@ -253,7 +253,12 @@ Visualization Manager:
       # for why the grid sits there -- so the focal point is the middle of the
       # run and the distance is what it takes to hold a 5.2 m wide, 6 m long
       # box inside a 912x624 crop.
-      Distance: 8
+      #
+      # 9, not 8: at 8 the opening frame had the start line cut off by the
+      # bottom edge -- the grid is the first thing the clip shows and half of
+      # each robot was outside it. 9 puts about half a metre of floor either
+      # side of the run without losing the leaders at the far end.
+      Distance: 9
       Pitch: 1.1
       Yaw: 4.7124
       Focal Point: {X: -3.0, Y: 2.0, Z: 0}

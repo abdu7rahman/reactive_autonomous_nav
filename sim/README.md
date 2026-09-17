@@ -67,19 +67,22 @@ bash sim/race.sh 600     # costmaps, planners, controllers, RViz, capture
 and nothing in this stack can put it back, so a second race needs a fresh
 bringup; `race.sh` refuses to start otherwise and says so.
 
+![the five-robot race](gif/race.gif)
+
 | lane | controller | finished |
 |---|---|---|
-| r1 | dwa | 13.2 - 13.3 s |
-| r4 | teb | 14.9 - 15.0 s |
-| r2 | pure_pursuit | 17.3 - 17.4 s |
-| r3 | stanley | 17.3 - 17.4 s |
-| r5 | mppi | did not finish |
+| r1 | dwa | 13.2 s |
+| r4 | teb | 14.9 s |
+| r2 | pure_pursuit | 17.3 s |
+| r3 | stanley | 17.3 s |
+| r5 | mppi | 18.6 s |
 
-Simulated seconds from the grid release to the finish line, over five races.
-The four that finish are repeatable to a tenth of a second, which they should
-be: the straight is clear, the goals are the same distance away, and nothing in
-the run is random. MPPI is not a slow finisher, it is a failure, and it is
-described below.
+Simulated seconds from the grid release to the finish line. The first four are
+repeatable to a tenth of a second over six races -- 13.2-13.3, 14.9-15.0,
+17.3-17.4, 17.3-17.4 -- which they should be: the straight is clear, the goals
+are the same distance away, and nothing in the run is random. MPPI's 18.6 s is
+one race, the first in which it finished at all; the five before it are in the
+MPPI section below, along with what was wrong.
 
 **The race is timed against the robots' own odometry, not their logs.** Each
 robot's odom frame is created where it spawned with x along the heading it
@@ -114,7 +117,8 @@ give 9.4 m. The grid runs from y = -1 to y = 5 on the second, which leaves
 the grid. `grid_tf.py` holds those numbers, and `race_up.sh` and
 `race_timer.py` read them from it rather than keeping copies.
 
-It made no difference to MPPI.
+It made no difference to MPPI, whose trouble was elsewhere -- see below -- but
+the straight is now the same race for all five, which it was not.
 
 ### Not the stock five-robot bringup
 
@@ -186,33 +190,71 @@ lifecycle node inside a sub-namespace of its own name, so a node given
 `/r1/local_costmap/local_costmap` waits forever. It is also what puts the
 published topics where the remappings expect them.
 
-### MPPI
+### MPPI was six times slower than its own control period
 
-MPPI is the one controller that does not finish, and it fails the same way
-every time: somewhere between 3.4 m and 5.0 m of the six it holds a saturated
-yaw rate at a near-zero speed and spins on the spot until the clock runs out.
-One run held `v=-0.02 w=-1.85` against a 1.9 rad/s limit for the rest of the
-race with its goal 2.5 m ahead.
+For the first five races MPPI was the only controller that did not finish, and
+it failed the same way every time: somewhere between 3.4 m and 5.3 m of the six
+it held a saturated yaw rate at a near-zero speed and spun on the spot until
+the clock ran out. One run held `v=-0.02 w=-1.85` against a 1.9 rad/s limit for
+the rest of the race with its goal 2.5 m ahead.
 
-That is visible at all only because of a change made while chasing it. All five
-control loops had branches that returned with no command and no log -- no
-transform, no lookahead point, a path or a band with fewer than two poses, no
-feasible time allocation -- so MPPI's entire log for its first failed race was
-three lines: the signature, `ready`, and `New path: 121 waypoints`. Each branch
-now brakes and says why, and MPPI prints the same per-tick line DWA does.
+Finding it took two changes that are worth keeping on their own.
 
-One hypothesis has been tested and rejected. The noise sampler's AR(1)
+**All five control loops had branches that returned with no command and no
+log** -- no transform, no lookahead point, a path or a band with fewer than two
+poses, no feasible time allocation. MPPI's entire log for its first failed race
+was three lines: the signature, `ready`, and `New path: 121 waypoints`. Each
+branch now brakes and says why, and MPPI prints the same per-tick line DWA
+does, with the robot's map pose, its yaw and the optimiser's wall cost in it.
+
+That line said it immediately: `opt=250-660ms` on a timer set to 50 ms, with
+the pose frozen across two or three consecutive ticks and yaw jumping a radian
+between them. The control loop was hogging its own single-threaded executor, so
+its transform listener only ran between ticks and it was steering on a pose up
+to half a second old. That is why it held while the robot went straight -- a
+stale pose is nearly right -- and broke down the moment a correction was
+needed.
+
+Profiled against `bench/rig.py` at K=1000, T=56 and a 121-waypoint path, two
+functions were 97% of a 337 ms tick, and neither for a reason to do with
+arithmetic:
+
+| | before | after |
+|---|---|---|
+| `_path_angle_cost` | 216.4 ms | 18.8 ms |
+| `_sample_controls` | 109.5 ms | 6.9 ms |
+| whole tick | 337.2 ms | 36.8 ms |
+
+`_path_angle_cost` built a (1000, 121, 2) difference tensor for each of 57
+timesteps -- 110 MB of allocation churn for the 28 Mflops it actually needs. It
+uses the squared-distance identity in one matrix product per timestep now,
+dropping the term that is constant across waypoints and so cannot change an
+argmin; checked against the old function on a curved path and 400 rollouts, the
+two arrays are identical. `_sample_controls` ran the noise recursion as 55,000
+interpreted iterations, one per sample per timestep; it is 56 numpy operations
+on (K,) arrays now, for the same draw. `bench/test_planners.py` reports the same
+step counts and path lengths to inside MPPI's own run-to-run spread.
+
+Under race load the tick now measures 29 ms minimum, 62 ms median, 105 ms at the
+ninetieth percentile and 191 ms worst, against 50 ms of simulated time -- which
+at the measured real-time factor is about 190 ms of wall clock. MPPI finished
+the next race it ran, on its lane, decelerating into its goal: `v=0.04 w=0.02
+at=(-0.42,4.82) yaw=1.59` against a lane at x = -0.40 and a path heading of
+1.5708.
+
+**One hypothesis was tested and rejected** before the profile was taken, and it
+is worth recording because it looked right. The noise sampler's AR(1)
 coefficient was 0.015, which is nav2's default for a parameter called `gamma`
 that is not this one -- nav2's `gamma` is the control-cost coefficient in
 `updateControlSequence`, "a trade-off between smoothness (high) and low energy
-(low)" -- so the name came across and the meaning did not. At 0.015 the noise
-is white over a 2.8 s horizon and every rollout is a near-copy of the
-warm-started baseline, which would explain a weighted mean that cannot leave
-its own warm start. Raising it to 0.9, for a 0.475 s correlation time, measured
-worse and fixed nothing: rooms-200 went 654 to 671 steps and 20.81 to 21.06 m
-against a run-to-run spread of about four steps, and the race still stalled,
-4.07 m before and 3.57 m after. Reverted, with the numbers in the comment.
-Whatever holds MPPI on that straight, it is not sample diversity.
+(low)" -- so the name came across and the meaning did not. At 0.015 the noise is
+white over a 2.8 s horizon and every rollout is a near-copy of the warm-started
+baseline, which would explain a weighted mean that cannot leave its own warm
+start. Raising it to 0.9, for a 0.475 s correlation time, measured worse and
+fixed nothing: rooms-200 went 654 to 671 steps and 20.81 to 21.06 m against a
+run-to-run spread of about four steps, and the race still stalled, 4.07 m before
+and 3.57 m after. Reverted, with the numbers in the comment beside it. The
+parameter keeps its accurate name.
 
 ## What the simulator needed before any of this would move
 

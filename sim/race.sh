@@ -163,7 +163,12 @@ if [ -n "$LAST" ]; then
   echo "    last finisher at ${LAST}s sim; trimming the capture at ${END}s"
 fi
 
+# crop before scale: the capture window starts one pixel inside RViz's 3D
+# viewport, which puts its left and right dock-splitter handles in the frame --
+# a few coloured pixels at each edge of the gif, at the middle height, that
+# look like world geometry and are not.  16 px off each side and 8 off the
+# bottom clears them and costs nothing at the ends of the straight.
 ffmpeg -loglevel error -y $TRIM -i "$RUN/$TAG.ts" -vf \
-  "setpts=PTS/$SPEED,fps=8,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=none" \
+  "crop=880:616:16:0,setpts=PTS/$SPEED,fps=8,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=none" \
   -loop 0 "$G/gif/$TAG.gif" < /dev/null
 ls -la "$G/gif/$TAG.gif" 2>/dev/null | awk '{printf "    gif %.1f MB\n", $5/1048576}'
