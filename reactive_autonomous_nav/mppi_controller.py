@@ -108,6 +108,9 @@ class MPPIControllerNode(Node):
         self.prev_cmd         = np.array([0.0, 0.0])
 
         # ── TF ───────────────────────────────────────────────────────
+        self.driven_path = Path()
+        self.driven_path.header.frame_id = 'map'
+
         self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
@@ -117,7 +120,9 @@ class MPPIControllerNode(Node):
                                  self._costmap_cb, 10)
 
         self.cmd_pub    = self.create_publisher(Twist,       '/cmd_vel_unstamped', 10)
-        self.status_pub = self.create_publisher(String,      '/dwa_status',        10)
+
+        self.driven_path_pub = self.create_publisher(Path,        '/driven_path',       10)
+        self.status_pub = self.create_publisher(String,      '/controller_status',        10)
         self.marker_pub = self.create_publisher(MarkerArray, '/mppi_trajectories', 10)
 
         self.control_timer = self.create_timer(0.05, self._control_loop)  # 20 Hz
@@ -168,6 +173,30 @@ class MPPIControllerNode(Node):
     # ================================================================
     #  Main control loop
     # ================================================================
+
+    # ================================================================
+    #  Driven-path breadcrumb
+    # ================================================================
+    def _record_pose(self, x, y):
+        """The line the robot actually drove, for RViz.
+
+        dwa_controller was the only one of the five publishing this, so in a
+        recorded run four of the controllers left no trail and there was no way
+        to see where the robot had been as against where it had been told to
+        go. Same topic, same frame, same z offset as DWA's, so one RViz display
+        covers all five.
+        """
+        ps = PoseStamped()
+        ps.header.frame_id    = 'map'
+        ps.header.stamp       = self.get_clock().now().to_msg()
+        ps.pose.position.x    = float(x)
+        ps.pose.position.y    = float(y)
+        ps.pose.position.z    = 0.12
+        ps.pose.orientation.w = 1.0
+        self.driven_path.poses.append(ps)
+        self.driven_path.header.stamp = ps.header.stamp
+        self.driven_path_pub.publish(self.driven_path)
+
     def _control_loop(self):
         if self.current_path is None or self.goal_reached:
             return
@@ -177,6 +206,7 @@ class MPPIControllerNode(Node):
         pose = self._get_robot_pose()
         if pose is None:
             return
+        self._record_pose(pose[0], pose[1])
 
         # Check goal reached
         goal = self.path_xy[-1]

@@ -37,13 +37,17 @@ class PurePursuitControllerNode(Node):
         self._wp_idx        = 0
 
         # ── TF ───────────────────────────────────────────────────────
+        self.driven_path = Path()
+        self.driven_path.header.frame_id = 'map'
+
         self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # ── Subs/Pubs ────────────────────────────────────────────────
         self.create_subscription(Path, '/plan', self._path_cb, 10)
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel_unstamped', 10)
-        self.status_pub = self.create_publisher(String, '/dwa_status', 10)
+        self.driven_path_pub = self.create_publisher(Path,        '/driven_path',       10)
+        self.status_pub = self.create_publisher(String, '/controller_status', 10)
         
         # Visualization
         from visualization_msgs.msg import Marker
@@ -72,6 +76,30 @@ class PurePursuitControllerNode(Node):
         except Exception:
             return None
 
+
+    # ================================================================
+    #  Driven-path breadcrumb
+    # ================================================================
+    def _record_pose(self, x, y):
+        """The line the robot actually drove, for RViz.
+
+        dwa_controller was the only one of the five publishing this, so in a
+        recorded run four of the controllers left no trail and there was no way
+        to see where the robot had been as against where it had been told to
+        go. Same topic, same frame, same z offset as DWA's, so one RViz display
+        covers all five.
+        """
+        ps = PoseStamped()
+        ps.header.frame_id    = 'map'
+        ps.header.stamp       = self.get_clock().now().to_msg()
+        ps.pose.position.x    = float(x)
+        ps.pose.position.y    = float(y)
+        ps.pose.position.z    = 0.12
+        ps.pose.orientation.w = 1.0
+        self.driven_path.poses.append(ps)
+        self.driven_path.header.stamp = ps.header.stamp
+        self.driven_path_pub.publish(self.driven_path)
+
     def _control_loop(self):
         if self.current_path is None or self.goal_reached:
             return
@@ -80,6 +108,7 @@ class PurePursuitControllerNode(Node):
         if pose is None:
             return
         rx, ry, ryaw = pose
+        self._record_pose(rx, ry)
 
         # Check goal distance
         goal = self.current_path.poses[-1].pose.position

@@ -114,6 +114,11 @@ class TEBControllerNode(Node):
         self.band           = []
         self._wp_idx        = 0
 
+        self.driven_path = Path()
+
+        self.driven_path.header.frame_id = 'map'
+
+
         self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
@@ -124,14 +129,14 @@ class TEBControllerNode(Node):
         )
 
         self.cmd_pub    = self.create_publisher(Twist,       '/cmd_vel_unstamped', 10)
+
+        self.driven_path_pub = self.create_publisher(Path,        '/driven_path',       10)
         self.band_pub   = self.create_publisher(MarkerArray, '/teb_band',          10)
-        # /dwa_status is what every planner subscribes to for controller status,
-        # and dwa, pure_pursuit, stanley and mppi all publish on it; the name is
-        # historical rather than DWA-specific. TEB publishing to /teb_status
-        # instead meant no planner ever heard it arrive, so replanning never
-        # stopped: the run reached the goal and the planner kept issuing fresh
-        # paths from the robot's position for the rest of the capture.
-        self.status_pub = self.create_publisher(String,      '/dwa_status',        10)
+        # Every controller reports arrival here and every planner listens, which
+        # is how replanning knows to stop. This one published to /teb_status
+        # instead, so no planner ever heard it arrive and the plan went on being
+        # reissued from the robot's position after it had stopped on the goal.
+        self.status_pub = self.create_publisher(String,      '/controller_status', 10)
 
         self.create_subscription(Odometry,      '/odom',                  self._odom_cb,    10)
         self.create_subscription(Path,          '/plan',                  self._path_cb,    10)
@@ -225,6 +230,30 @@ class TEBControllerNode(Node):
         except Exception:
             return None
 
+
+    # ================================================================
+    #  Driven-path breadcrumb
+    # ================================================================
+    def _record_pose(self, x, y):
+        """The line the robot actually drove, for RViz.
+
+        dwa_controller was the only one of the five publishing this, so in a
+        recorded run four of the controllers left no trail and there was no way
+        to see where the robot had been as against where it had been told to
+        go. Same topic, same frame, same z offset as DWA's, so one RViz display
+        covers all five.
+        """
+        ps = PoseStamped()
+        ps.header.frame_id    = 'map'
+        ps.header.stamp       = self.get_clock().now().to_msg()
+        ps.pose.position.x    = float(x)
+        ps.pose.position.y    = float(y)
+        ps.pose.position.z    = 0.12
+        ps.pose.orientation.w = 1.0
+        self.driven_path.poses.append(ps)
+        self.driven_path.header.stamp = ps.header.stamp
+        self.driven_path_pub.publish(self.driven_path)
+
     def _control_loop(self):
         if self.current_pose is None or not self.band:
             return
@@ -233,6 +262,7 @@ class TEBControllerNode(Node):
         if pose is None:
             return
         rx, ry, ryaw = pose
+        self._record_pose(rx, ry)
 
         self._advance_wp(rx, ry)
         self._rebuild_band(rx, ry)
