@@ -154,14 +154,15 @@ that is being claimed.
 
 | Trajectories | This repo | [CppRobotics](https://github.com/onlytailei/CppRobotics) | [goktug97](https://github.com/goktug97/DynamicWindowApproach) (C) | [amslabtech](https://github.com/amslabtech/dwa_planner) |
 | ---: | ---: | ---: | ---: | ---: |
-| 36 | **0.012 ms** | 0.015 ms | 0.094 ms | 0.314 ms |
-| 100 | **0.032 ms** | 0.038 ms | 0.317 ms | 0.910 ms |
-| 400 | **0.136 ms** | 0.169 ms | 1.451 ms | 3.636 ms |
-| 900 | **0.298 ms** | 0.368 ms | 3.380 ms | 8.519 ms |
-| 2,500 | **0.876 ms** | 1.092 ms | 9.481 ms | 22.647 ms |
+| 36 | **0.012 ms** | 0.015 ms | 0.096 ms | 0.319 ms |
+| 100 | **0.033 ms** | 0.038 ms | 0.321 ms | 0.919 ms |
+| 400 | **0.136 ms** | 0.172 ms | 1.458 ms | 3.647 ms |
+| 900 | **0.300 ms** | 0.376 ms | 3.388 ms | 8.444 ms |
+| 2,500 | **0.873 ms** | 1.097 ms | 9.570 ms | 22.889 ms |
 
-Worst spread over the three runs: 6% for this repo, 9% for CppRobotics, 14%
-for goktug97, 11% for amslabtech.
+Medians over four complete runs; the worst spread between them at any
+trajectory count is 15%, and it is 8-9% at four of the five counts. Nothing
+smaller than that is being claimed.
 
 **Python** — `bench/dwa_compare.py`
 
@@ -245,16 +246,33 @@ same order of magnitude on equivalent maps, not that it beats Nav2.
 
 | Map | Python A\* | C++ A\* | Speedup |
 | --- | ---: | ---: | ---: |
-| 128 × 128 | 7.50 ms | 0.046 ms | 163× |
-| 256 × 256 | 110.26 ms | 1.115 ms | 99× |
-| 384 × 384 | 884.21 ms | 4.598 ms | 192× |
+| 128 × 128 | 7.76 ms | 0.067 ms | 116× |
+| 256 × 256 | 119.08 ms | 1.071 ms | 111× |
+| 384 × 384 | 899.96 ms | 4.551 ms | 198× |
 
 Not all language: the C++ port also added a closed set, so it expands 21,015
 nodes where Python expands 61,631 on the same map. Roughly 3× is algorithmic.
 
-For the DWA rollout the gap *shrinks* with batch size — 26× per trajectory at
-the accel-limited window the controller actually evaluates, down to 4× at
-2,626 trajectories, because numpy's fixed per-call overhead amortises away.
+For the DWA rollout, on the same window:
+
+| Window | Trajectories | Python | C++ | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| accel-limited | 410 | 0.876 ms | 0.145 ms | 6× |
+| full velocity space | 2,626 | 4.554 ms | 1.042 ms | 4× |
+
+The gap shrinks with batch size, because numpy's fixed per-call overhead
+amortises away.
+
+"On the same window" is new, and it is the whole point of the row. Both
+harnesses kept their own copy of the controller's tuning, and both had drifted
+from it: the accelerations were corrected to the plant's 0.90 m/s² and
+7.725 rad/s² and neither copy followed, so the row labelled "accel-limited"
+was timing 36 trajectories on the Python side against 30 on the C++ side and
+reporting the ratio as a per-trajectory speedup. It read 26×. Neither number
+described a window the robot searches. `bench_dwa.py` now takes every constant
+off the controller by the same AST extraction `rig.py` uses, and
+`bench_dwa.cpp` shares the accelerations with `cpp/src/dwa_controller.cpp`;
+both report 410.
 
 ## Files
 

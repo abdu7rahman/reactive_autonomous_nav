@@ -47,6 +47,18 @@ static inline double angle_wrap(double a)
     return a;
 }
 
+static std::vector<double> lattice(double lo, double hi, double res)
+{
+    if (hi <= lo) return { lo };
+    std::vector<double> out;
+    const long k0 = (long)std::ceil(lo / res - 1e-9);
+    const long k1 = (long)std::floor(hi / res + 1e-9);
+    if (k0 > k1 || k0 * res > lo + 1e-9) out.push_back(lo);
+    for (long k = k0; k <= k1; k++) out.push_back(k * res);
+    if (out.back() < hi - 1e-9) out.push_back(hi);
+    return out;
+}
+
 static int sweep(double v_min, double v_max, double w_min, double w_max,
                  double vel_res, double yaw_res, double lax, double lay,
                  double& best_v, double& best_w)
@@ -57,8 +69,15 @@ static int sweep(double v_min, double v_max, double w_min, double w_max,
     int n = 0;
     best_v = best_w = 0.0;
 
-    for (double v = v_min; v <= v_max + 1e-9; v += vel_res) {
-        for (double w = w_min; w <= w_max + 1e-9; w += yaw_res) {
+    // Same lattice as the controllers: every multiple of the resolution
+    // inside the window, with both bounds present.  Accumulating the
+    // resolution from the lower bound admits one sample past the upper bound
+    // and usually never evaluates the bound itself, so this was timing a
+    // slightly different candidate set from the one it is compared against.
+    const std::vector<double> vs = lattice(v_min, v_max, vel_res);
+    const std::vector<double> ws = lattice(w_min, w_max, yaw_res);
+    for (double v : vs) {
+        for (double w : ws) {
             n++;
             RobotState cur = s;
             bool collision = false;
@@ -110,7 +129,14 @@ int main(int argc, char** argv)
     if (fread(MAP.data(), 1, MAP.size(), f) != MAP.size()) return 1;
     fclose(f);
 
-    const double VEL_RES = 0.02, YAW_RES = 0.04, MAX_ACC = 0.40, MAX_DYAW = 1.00;
+    // The accelerations the controller actually carries, out of
+    // irobot_create_control/config/control.yaml by way of
+    // cpp/src/dwa_controller.cpp and dwa_controller.py.  They were 0.40
+    // and 1.00 here, so the row labelled "accel-limited" was timing a
+    // window 2.2 and 7.7 times narrower than the one the robot searches
+    // -- fewer trajectories, and a quicker sweep, for a window nothing
+    // uses.
+    const double VEL_RES = 0.02, YAW_RES = 0.04, MAX_ACC = 0.90, MAX_DYAW = 7.725;
     struct Win { const char* name; double vmin, vmax, wmin, wmax; };
     Win wins[2] = {
         {"accel-limited", std::max(0.0, 0.25 - MAX_ACC * dt_), std::min(max_vel_, 0.25 + MAX_ACC * dt_),

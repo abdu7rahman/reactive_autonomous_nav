@@ -20,17 +20,27 @@ def _sig():
     print("  " + "".join(chr(c - 7) for c in
           (104,105,107,124,115,39,121,104,111,116,104,117)), file=sys.stderr)
 
-DT, PREDICT, VEL_RES, YAW_RES = 0.1, 2.5, 0.02, 0.04
-MAX_VEL, MAX_YAW, MAX_ACC, MAX_DYAW = 0.50, 2.00, 0.40, 1.00
+def windows(node):
+    """(label, vs, ws) for the per-cycle accel-limited window and the full space.
 
-
-def windows():
-    """(label, vs, ws) for the per-cycle accel-limited window and the full space."""
+    Sampled by the controller's own _samples and bounded by its own limits,
+    rather than from a copy of the tuning kept here.  The copy drifted: it
+    still had the accelerations at 0.40 and 1.00 after the controller's were
+    corrected to the plant's 0.90 and 7.725, so the row labelled
+    "accel-limited" timed 36 trajectories of a window the controller does
+    not have -- against a C++ row timing 30 of a different one again.  The
+    two numbers were presented as the same work.
+    """
     v, w = 0.25, 0.0
-    tight = (np.arange(max(0.0, v - MAX_ACC * DT), min(MAX_VEL, v + MAX_ACC * DT) + VEL_RES, VEL_RES),
-             np.arange(max(-MAX_YAW, w - MAX_DYAW * DT), min(MAX_YAW, w + MAX_DYAW * DT) + YAW_RES, YAW_RES))
-    wide = (np.arange(0.0, MAX_VEL + VEL_RES, VEL_RES),
-            np.arange(-MAX_YAW, MAX_YAW + YAW_RES, YAW_RES))
+    lo = max(node.min_vel, v - node.max_accel * node.dt)
+    hi = min(node.max_vel, v + node.max_accel * node.dt)
+    wlo = max(-node.max_yawrate, w - node.max_dyawrate * node.dt)
+    whi = min(node.max_yawrate, w + node.max_dyawrate * node.dt)
+    tight = (node._samples(lo, hi, node.vel_res),
+             node._samples(wlo, whi, node.yawrate_res))
+    wide = (node._samples(node.min_vel, node.max_vel, node.vel_res),
+            node._samples(-node.max_yawrate, node.max_yawrate,
+                          node.yawrate_res))
     return [("accel-limited", *tight), ("full velocity space", *wide)]
 
 
@@ -45,14 +55,17 @@ def main(reps=25):
 
     grid, res, origin = dump_local()
     node = object.__new__(m.DWAControllerNode)
+    # the shipped tuning first -- every constant from the controller itself, by
+    # the same AST extraction bench/rig.py uses, so this cannot drift from it
+    # again -- and then the map, which __init__ nulls
+    from bench import rig
+    rig.apply_defaults(node, "dwa_controller")
     node.costmap_info = types.SimpleNamespace(resolution=res, width=grid.shape[1], height=grid.shape[0])
     node.costmap_origin = origin
     node.costmap_data = grid
-    node.predict_time, node.dt, node.max_vel = PREDICT, DT, MAX_VEL
-    node.heading_cost_gain, node.speed_cost_gain, node.obstacle_cost_gain = 5.0, 0.5, 5.0
 
     out = []
-    for label, vs, ws in windows():
+    for label, vs, ws in windows(node):
         node._score_trajectories(0.0, 0.0, 0.0, vs, ws, 2.5, 0.4)
         ts = []
         for _ in range(reps):

@@ -34,6 +34,9 @@
 
 static constexpr uint8_t LETHAL_COST = 253;
 static constexpr uint8_t WARN_COST   = 80;
+// How near the lookahead waypoint counts as reaching it, for the heading
+// term above.  dwa_controller.py's wp_tol.
+static constexpr double  WP_TOL      = 0.25;
 
 // HSV → RGB, full saturation & value, h in [0,1]
 static std::array<float,3> hsv_to_rgb(float h)
@@ -88,7 +91,28 @@ public:
         heading_gain_  = declare_parameter("heading_gain",  5.00);
         speed_gain_    = declare_parameter("speed_gain",    0.50);
         obstacle_gain_ = declare_parameter("obstacle_gain", 5.00);
-        lookahead_     = declare_parameter("lookahead",     1.50);
+        // Eight waypoints ahead, not a 1.50 m radius.  Two things were wrong
+        // with the radius.
+        //
+        // It consumed every waypoint inside it, so on a plan emitted at
+        // costmap resolution -- which every planner in this package does --
+        // it swallowed thirty at once and then aimed 1.50 m away.  The
+        // rollout horizon is predict_time * max_vel = 1.15 m, so the target
+        // was always beyond reach, no trajectory ever arrived at it, and the
+        // heading term fell back to the bearing from the trajectory's
+        // endpoint -- the pathology the arrival truncation exists to remove.
+        // With heading_gain 5.0 against speed_gain 0.5 the winner was then
+        // whichever candidate barely moved: measured at 0.02 m/s with clear
+        // floor ahead and every one of 451 candidates collision-free, which
+        // is how this controller stalled 0.55 m into a 5.80 m race four times
+        // running.
+        //
+        // A waypoint count tracks the plan's resolution and puts the target
+        // about 0.4 m out, inside the horizon.  Eight is the count
+        // bench/test_dwa_window.py's sweep chose for the Python controller --
+        // 3 oscillates across open rooms, 12 is 74% slower in a maze, 16
+        // never finishes one -- and this is the same method on the same plans.
+        lookahead_wps_ = declare_parameter("lookahead_wps", 8);
         goal_tol_      = declare_parameter("goal_tol",      0.15);
 
         auto qos_map = rclcpp::QoS(1).transient_local().reliable();
@@ -126,7 +150,8 @@ private:
     // ── params ────────────────────────────────────────────────────────────────
     double max_vel_, min_vel_, max_yawrate_, max_accel_, max_dyawrate_;
     double vel_res_, yawrate_res_, predict_time_, dt_;
-    double heading_gain_, speed_gain_, obstacle_gain_, lookahead_, goal_tol_;
+    double heading_gain_, speed_gain_, obstacle_gain_, goal_tol_;
+    int    lookahead_wps_;
     std::string map_frame_, base_frame_;
 
     // ── state ─────────────────────────────────────────────────────────────────
@@ -226,21 +251,40 @@ private:
     }
 
     // ── lookahead waypoint ─────────────────────────────────────────────────────
+    // Retire the waypoints the robot has passed, then aim a fixed count ahead.
+    //
+    // Retirement is by proximity to the robot, one waypoint at a time, so the
+    // index tracks progress along the plan; the target is then
+    // lookahead_wps_ further on.  The previous form did both at once with a
+    // single radius and did neither well -- see the comment on the parameter.
     const geometry_msgs::msg::PoseStamped& get_lookahead_wp(const RobotState& s) const
     {
-        // advance wp_idx to stay ahead of robot
-        for (size_t i = wp_idx_; i < global_plan_->poses.size() - 1; i++) {
-            double d = std::hypot(
-                s.x - global_plan_->poses[i].pose.position.x,
-                s.y - global_plan_->poses[i].pose.position.y);
-            if (d < lookahead_) {
-                const_cast<size_t&>(wp_idx_) = i + 1;
-            } else break;
+        const size_t last = global_plan_->poses.size() - 1;
+        while (wp_idx_ < last) {
+            const auto& p = global_plan_->poses[wp_idx_].pose.position;
+            if (std::hypot(s.x - p.x, s.y - p.y) > WP_TOL) break;
+            const_cast<size_t&>(wp_idx_) = wp_idx_ + 1;
         }
-        return global_plan_->poses[std::min(wp_idx_, global_plan_->poses.size() - 1)];
+        const size_t tidx = std::min(wp_idx_ + (size_t)lookahead_wps_, last);
+        return global_plan_->poses[tidx];
     }
 
     // ── stuck detection ───────────────────────────────────────────────────────
+    // Free distance straight ahead, along the centre line.  The costmap
+    // carries the inscribed band, which is what makes a centre-point lethal
+    // check a footprint check -- the same query the trajectory scoring makes
+    // a moment later -- so widening this by the robot radius on top of it
+    // would ask for twice the robot's width of clearance.
+    double forward_clearance(const RobotState& s) const
+    {
+        const double ca = std::cos(s.yaw), sa = std::sin(s.yaw);
+        for (double d = 0.1; d < 2.0; d += 0.05) {
+            if (costmap_lookup(s.x + d * ca, s.y + d * sa) >= LETHAL_COST)
+                return d;
+        }
+        return std::numeric_limits<double>::infinity();
+    }
+
     // Every multiple of `res` inside [lo, hi], with both bounds present.
     // A window narrower than one step still yields its own endpoints rather
     // than nothing, which is what an empty candidate set costs: a commanded
@@ -344,9 +388,24 @@ private:
             return;
         }
 
+        // Forward clearance cap.  Without it this controller either finds a
+        // whole 2.5-second trajectory clear of everything or commands zero,
+        // and in a 1.10 m gate 0.3 m ahead it is the second: at 0.46 m/s the
+        // horizon reaches 1.15 m, past the wall, so every candidate is
+        // discarded.  That is what the C++ lane of the versus race did --
+        // stopped at 0.52 m of 5.80 and spun -- while the Python controller,
+        // which has had this cap since it was written, threaded the same gate
+        // in 13.9 s.  The bands are the Python one's.
+        const double fwd = forward_clearance(s);
+        const double v_cap = fwd < 0.35 ? 0.08 : (fwd < 0.7 ? 0.18 : max_vel_);
+
         // dynamic window
         double v_min = std::max(min_vel_,      s.v - max_accel_    * dt_);
         double v_max = std::min(max_vel_,      s.v + max_accel_    * dt_);
+        // The cap trims the reachable top speed; it must not push the window
+        // below the floor max_accel sets, or the only candidate left is a
+        // velocity the base cannot produce.
+        v_max = std::max(v_min, std::min(v_max, v_cap));
         double w_min = std::max(-max_yawrate_, s.w - max_dyawrate_ * dt_);
         double w_max = std::min( max_yawrate_, s.w + max_dyawrate_ * dt_);
 
@@ -356,6 +415,7 @@ private:
 
         double best_score = -std::numeric_limits<double>::infinity();
         double best_v = 0.0, best_w = 0.0;
+        int    n_tried = 0, n_kept = 0;
         int    steps  = (int)(predict_time_ / dt_);
 
         visualization_msgs::msg::MarkerArray traj_ma;
@@ -374,8 +434,10 @@ private:
             for (double w : ws) {
                 // simulate trajectory
                 RobotState cur = s;
-                bool collision  = false;
-                double min_clearance = (double)LETHAL_COST;
+                bool collision = false;
+                double pen_sum = 0.0;      // inflated-cost penalty, summed
+                RobotState arrive = s;     // where it reaches the waypoint
+                bool arrived = false;
 
                 std::vector<geometry_msgs::msg::Point> traj_pts;
                 traj_pts.reserve(steps);
@@ -384,21 +446,59 @@ private:
                     cur = motion(cur, v, w);
                     uint8_t cost = costmap_lookup(cur.x, cur.y);
                     if (cost >= LETHAL_COST) { collision = true; break; }
-                    min_clearance = std::min(min_clearance, (double)(LETHAL_COST - cost));
+                    if (cost > WARN_COST) {
+                        pen_sum += (double)(cost - WARN_COST)
+                                 / (double)(LETHAL_COST - WARN_COST);
+                    }
+                    if (!arrived &&
+                        std::hypot(cur.x - lax, cur.y - lay) <= WP_TOL) {
+                        arrive = cur;
+                        arrived = true;
+                    }
                     geometry_msgs::msg::Point p; p.x = cur.x; p.y = cur.y;
                     traj_pts.push_back(p);
                 }
+                n_tried++;
                 if (collision || traj_pts.empty()) continue;
+                n_kept++;
+                if (!arrived) arrive = cur;
 
-                // score
-                double target_yaw = std::atan2(lay - cur.y, lax - cur.x);
-                double yaw_err    = std::abs(angle_wrap(target_yaw - cur.yaw));
-                double h_score    = M_PI - yaw_err;
-                double o_score    = min_clearance;
-                double s_score    = v / max_vel_;
-                double total      = heading_gain_  * h_score
-                                  + obstacle_gain_ * o_score
-                                  + speed_gain_    * s_score;
+                // Scored where the trajectory arrives, not where it ends up,
+                // and on the same three terms the Python controller uses.
+                //
+                // Two things were wrong here, and together they are why this
+                // controller crawled and then stalled 0.55 m into a 5.80 m
+                // race the Python one finished in 14.0 s.
+                //
+                // The bearing was read at the last rollout sample. That is
+                // the textbook formulation and it has a pathology whenever
+                // the waypoint is nearer than the rollout reaches: the
+                // horizon spans predict_time * max_vel = 1.15 m and the
+                // lookahead waypoint sits about 0.4 m out, so any trajectory
+                // quick enough to get there flies past it, the bearing from
+                // its endpoint back to the waypoint inverts, and its heading
+                // score collapses. The controller settles where
+                // v * predict_time is about the lookahead distance -- 0.10 to
+                // 0.14 m/s with a 0.46 m/s limit and clear floor ahead.
+                // Truncating at the first sample inside WP_TOL removes the
+                // penalty without adding a gain to trade off.
+                //
+                // And the obstacle term was the raw margin to lethal, up to
+                // 253, *added* to a heading term worth at most pi and a speed
+                // term worth at most 1 -- so at the shipped gains a clear
+                // trajectory scored 1265 for clearance against 15.7 for
+                // pointing the right way, and the controller was maximising
+                // room rather than making progress. It is a normalised
+                // penalty now, capped at 10 and subtracted, which is what the
+                // gains beside it were chosen against.
+                double diff = angle_wrap(
+                    std::atan2(lay - arrive.y, lax - arrive.x) - arrive.yaw);
+                double h_score = 1.0 - std::abs(diff) / M_PI;
+                double o_cost  = std::min(10.0, pen_sum / steps * 10.0);
+                double s_score = v / max_vel_;
+                double total   = heading_gain_  * h_score
+                               + speed_gain_    * s_score
+                               - obstacle_gain_ * o_cost;
 
                 if (total > best_score) {
                     best_score = total;
@@ -406,9 +506,7 @@ private:
                 }
 
                 // viz
-                double max_possible = heading_gain_ * M_PI
-                                    + obstacle_gain_ * LETHAL_COST
-                                    + speed_gain_;
+                const double max_possible = heading_gain_ + speed_gain_;
                 float ratio = (float)std::max(0.0, std::min(1.0, total / max_possible));
                 auto rgb = hsv_to_rgb(0.67f * (1.0f - ratio));  // blue=low, red=high
 
@@ -425,6 +523,17 @@ private:
                 traj_ma.markers.push_back(m);
             }
         }
+
+        // The same line dwa_controller.py prints, at the same throttle, so the
+        // two can be read side by side.  This controller printed nothing per
+        // tick, which is why three wrong guesses were made about why it
+        // stalled before anyone looked at what it was choosing from.
+        RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+            "v=%.2f w=%.2f at=(%.2f,%.2f) yaw=%.2f wp=%zu/%zu fwd=%.2f "
+            "kept=%d/%d best=%.2f",
+            best_v, best_w, s.x, s.y, s.yaw, wp_idx_,
+            global_plan_->poses.size(), fwd, n_kept, n_tried,
+            std::isfinite(best_score) ? best_score : -1.0);
 
         // publish command
         geometry_msgs::msg::Twist cmd;

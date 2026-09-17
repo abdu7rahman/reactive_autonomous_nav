@@ -43,10 +43,19 @@ stop $G/run/job/*.pid
 # reported as exit code 144 with the work half done.  The ancestor guard below
 # only protects this script's own ancestry; it cannot protect a sibling.
 L=lib/reactive_autonomous_nav
+# And the C++ package, which is a different install path.  This list had only
+# the Python one, and the C++ controller therefore survived every sweep: by the
+# time it was noticed, two of them were driving r1 at once from two different
+# builds -- the older one from a run twelve minutes earlier -- and the four
+# recorded races of the versus field had been measuring the fight rather than
+# the controller.  That is the exact failure the header above describes, on a
+# new executable.
+C=lib/reactive_nav_cpp
 PATS=("$L/dwa_controller" "$L/pure_pursuit_controller" "$L/stanley_controller"
       "$L/teb_controller" "$L/mppi_controller" "$L/astar_planner"
       "$L/theta_star_planner" "$L/smac_planner" "$L/rrt_planner"
       "$L/rrt_smac_hybrid_planner"
+      "$C/dwa_controller" "$C/astar_planner" "$C/smac_planner"
       "nav2_costmap_2d/nav2_costmap_2d" "nav2_lifecycle_manager/lifecycle_manager"
       # nav2's own controllers race in the nav2 field, one controller_server
       # per lane, and this list did not know about them: four of them survived
