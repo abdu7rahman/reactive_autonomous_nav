@@ -95,10 +95,46 @@ RATE = 10.0
 # y = -0.4 instead of 0.0 put the outermost lane 0.54 m from the standing
 # person at (1.0, -1.0), which is inside the inflation.
 GATES = [(0.9, -0.45), (2.6, +0.45), (4.3, -0.45)]
+
+# Three more walls, where a sixth lane's wall would have been.
+#
+# With one wall per lane per gate, the middle three robots drive through a
+# 1.10 m gap between their own wall and their neighbour's, and the outer two
+# find one gate each with nothing on the far side -- r5 at the gates that push
+# right, r1 at the gate that pushes left. Measured: twelve of the fifteen
+# corridors are 1.10 m wide with a 0.50 m band of zero cost down the middle,
+# and three are open. An open gate is a wider gate, and the whole point of
+# translating one chicane across five lanes is that the lane cannot be the
+# variable.
+#
+# So the outermost lane gets the wall its missing neighbour would have put
+# there: lane_max + spacing + offset when the corridor runs right, lane_min -
+# spacing + offset when it runs left. That is -6.65 at y = 2.6 and +2.65 at
+# y = 0.9 and 4.3, both on floor the occupancy map says is free -- the left one
+# spans -6.95..-6.35 against a clear region starting at -7.06, and the right
+# one 2.35..2.95 against one ending at +3.02.
 GATE_W = 0.60              # along x, the blocking span
 GATE_T = 0.15              # along y, thin enough not to be a corridor
 GATE_H = 0.60              # tall enough for a lidar 0.25 m off the floor
 RACE_LENGTH = 6.0          # start line to finish line, along the course
+
+
+def wall_poses():
+    """Every chicane wall, as (x of its centre, y, the gate's offset).
+
+    One per lane per gate, plus the three edge walls the outermost lanes need
+    so that all five corridors are the same 1.10 m gap -- see the note beside
+    GATES.
+    """
+    lanes = sorted(LANES.values())
+    spacing = lanes[1] - lanes[0]
+    out = []
+    for gy, off in GATES:
+        for lx in lanes:
+            out.append((lx + off, gy, off))
+        edge = (lanes[-1] + spacing) if off < 0 else (lanes[0] - spacing)
+        out.append((edge + off, gy, off))
+    return out
 
 
 class GridTf(Node):
@@ -129,13 +165,13 @@ class GridTf(Node):
         self.create_timer(1.0 / RATE, self._tick)
         self.get_logger().info(
             f'pinning {len(LANES)} odom origins into map at {RATE:.0f} Hz, '
-            f'{len(LANES) * len(GATES)} chicane walls drawn')
+            f'{len(wall_poses())} chicane walls drawn')
 
     def _walls(self) -> MarkerArray:
         ma = MarkerArray()
         i = 0
-        for lx in LANES.values():
-            for gy, off in GATES:
+        for lx, gy, off in wall_poses():
+            if True:
                 m = Marker()
                 m.header.frame_id = 'map'
                 m.ns = 'chicane'
@@ -143,7 +179,7 @@ class GridTf(Node):
                 i += 1
                 m.type = Marker.CUBE
                 m.action = Marker.ADD
-                m.pose.position.x = lx + off
+                m.pose.position.x = lx
                 m.pose.position.y = gy
                 m.pose.position.z = GATE_H / 2
                 m.pose.orientation.w = 1.0
@@ -172,13 +208,13 @@ def main() -> None:
         # Boxes rather than cylinders: a flat face is what makes the corridor
         # beside it a corridor, and the lidar returns off a curve at a shallow
         # angle are the sparsest returns there are.
-        for ns, lx in LANES.items():
-            for i, (gy, off) in enumerate(GATES):
-                name = f'gate_{ns}_{i}'
+        for k, (wx, gy, off) in enumerate(wall_poses()):
+            if True:
+                name = f'gate_{k}'
                 sdf = (
                     f'<?xml version="1.0"?><sdf version="1.7">'
                     f'<model name="{name}"><static>true</static>'
-                    f'<pose>{lx + off:.3f} {gy:.3f} {GATE_H / 2:.3f} 0 0 0</pose>'
+                    f'<pose>{wx:.3f} {gy:.3f} {GATE_H / 2:.3f} 0 0 0</pose>'
                     f'<link name="link">'
                     f'<collision name="c"><geometry><box><size>'
                     f'{GATE_W} {GATE_T} {GATE_H}</size></box></geometry></collision>'
