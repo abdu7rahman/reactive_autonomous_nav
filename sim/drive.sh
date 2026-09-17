@@ -80,12 +80,23 @@ for attempt in 1 2 3; do
   start "$JOB/nav.pid" ros2 launch reactive_autonomous_nav nav_launch.py \
         planner:="$PLANNER" controller:="$CONTROLLER" use_sim_time:=true
   sleep 20
-  # Repair the pair the launch's own nav2_lifecycle_manager may have given up
+  if timeout 120 python3 $G/wait_topic.py /global_costmap/costmap OccupancyGrid 100 10000; then
+    up=1
+    break
+  fi
+
+  # Only now repair the pair the launch's own nav2_lifecycle_manager gave up
   # on.  The manager treats one failed transition as final -- it logs "Failed
   # to bring up all requested nodes. Aborting bringup" and never retries --
-  # and it lost all three attempts of one run here, the same failure the race
-  # hit ten costmaps at a time. lifecycle_up.py reads each node's state first,
-  # so it is a no-op when the manager won and a repair when it did not.
+  # and it lost all three of one run's attempts here, the same failure the
+  # race hit ten costmaps at a time.
+  #
+  # After the wait, not before it: run 20 s into a launch the nodes have not
+  # finished starting, and lifecycle_up.py spends its whole budget probing
+  # services that do not exist yet and reports 0/2 on a bringup the manager
+  # then completed by itself. Here it is reached only when the costmap really
+  # has not published.
+  echo "    costmap has not published; driving its lifecycle directly"
   timeout 220 python3 $G/lifecycle_up.py 30 \
       /local_costmap/local_costmap /global_costmap/global_costmap \
       2>&1 | sed 's/^/    /'
@@ -118,14 +129,16 @@ sleep 35
 # dropped with no error anywhere.  The first recorded run was 190 seconds of a
 # robot that had never been told where to go: RViz starting alongside the nav
 # stack slowed the planner's startup past the fixed sleep that used to be here.
-subs=0
-for _ in $(seq 1 40); do
-  subs=$(timeout 20 ros2 topic info /goal_pose 2>/dev/null | awk '/Subscription count/{print $3}')
-  [ "${subs:-0}" -ge 1 ] && break
-  sleep 3
-done
-n=$(timeout 25 ros2 topic info /cmd_vel_unstamped 2>/dev/null | awk '/Publisher count/{print $3}')
-echo "    /goal_pose subscribers: ${subs:-0}, /cmd_vel_unstamped publishers: ${n:-?}"
+# The counts come from rclpy's graph API, not `ros2 topic info`: the CLI
+# reported 0 subscribers on runs whose planner demonstrably received the goal
+# and drove to it, so this loop burned its whole budget on every clip.
+subs=$(timeout 140 python3 $G/wait_subs.py /goal_pose 120 1 2>/dev/null | tail -1)
+# Publishers, not subscribers, on /cmd_vel_unstamped: the failure this catches
+# is a second one. Two controllers, two costmap pairs and an hour-old manual
+# publisher were once all writing to that topic at once, and the robot followed
+# the stale one.
+pubs=$(timeout 40 python3 $G/wait_subs.py /cmd_vel_unstamped 5 99 --publishers 2>/dev/null | tail -1)
+echo "    /goal_pose subscribers: ${subs:-0}, /cmd_vel_unstamped publishers: ${pubs:-?}"
 
 # Capture opens before the goal so the clip starts on a robot at rest and the
 # plan appears inside the recording.  1.2 frames a second of wall clock is
