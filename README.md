@@ -8,14 +8,14 @@ Custom reactive autonomous navigation stack for TurtleBot4, built on ROS2 Jazzy.
 
 ```
                   ┌──────────────────────┐
-                  │   Global Planner     │  /goal_pose → /global_plan
+                  │   Global Planner     │  /goal_pose → /plan
                   │  (A* / Theta* /      │
                   │   SMAC / RRT /       │
                   │   RRT-SMAC Hybrid)   │
                   └──────────┬───────────┘
-                             │ /global_plan
+                             │ /plan
                   ┌──────────▼───────────┐
-                  │   Local Controller   │  /global_plan + /odom → /cmd_vel
+                  │   Local Controller   │  /plan + /odom → /cmd_vel_unstamped
                   │  (DWA / Pure Pursuit │
                   │   Stanley / TEB /    │
                   │   MPPI)              │
