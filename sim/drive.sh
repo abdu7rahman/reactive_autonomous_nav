@@ -26,7 +26,7 @@ G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 export DISPLAY=:99
 
 PLANNER=$1; CONTROLLER=$2; TAG=$3; WALL=${4:-190}
-GX=${GX:-2.0}; GY=${GY:--5.0}
+GX=${GX:-2.0}; GY=${GY:--3.2}
 RUN=$G/run; JOB=$RUN/job; mkdir -p "$JOB" "$RUN/log"
 trap 'stop $JOB/*.pid' EXIT
 
@@ -34,15 +34,6 @@ echo "=== $TAG : planner=$PLANNER controller=$CONTROLLER"
 bash $G/clean.sh
 bash $G/reset.sh > /dev/null 2>&1
 
-
-# RViz first, and given time to finish loading.  Started alongside the nav
-# stack it competes for the same four cores while it compiles shaders and loads
-# the robot meshes through software GL, and the global costmap -- which has a
-# bounded wait for base_link->map at activation -- loses that race and comes up
-# with no data at all.  The symptom downstream is the planner logging
-# "Cannot plan: global_data is None" for the whole run.
-start "$JOB/rviz.pid" rviz2 -d $G/nav.rviz --ros-args -p use_sim_time:=true
-sleep 35
 
 # Gate on tf here, with RViz already up, rather than before it.  The costmaps
 # have a bounded wait for base_link->map at activation and nav2's lifecycle
@@ -54,15 +45,45 @@ if ! timeout 140 python3 $G/wait_tf.py 120 5; then
   exit 1
 fi
 
-start "$JOB/nav.pid" ros2 launch reactive_autonomous_nav nav_launch.py \
-      planner:="$PLANNER" controller:="$CONTROLLER" use_sim_time:=true
-sleep 20
-
-# Gate on the costmap actually delivering, not on a guessed sleep
-if ! timeout 200 python3 $G/wait_topic.py /global_costmap/costmap OccupancyGrid 180; then
-  echo "    global costmap never published -- aborting $TAG"
+# Bring the nav stack up, and retry if the costmaps lose their activation race.
+#
+# nav2's costmap waits a bounded time for base_link->map when it activates, and
+# when that wait expires the lifecycle manager gives up on the whole bringup
+# permanently -- it logs "Failed to bring up all requested nodes. Aborting
+# bringup" and never tries again, so the planner spends the run on "Cannot plan:
+# global_data is None".  Whether it wins that race is luck: with fifty-odd nodes
+# in the graph, DDS discovery for a freshly started subscriber sometimes takes
+# longer than the wait, and tf is provably healthy seconds either side of it.
+# Reordering the startup changed which runs happened to win.  Retrying the
+# bringup is the honest fix for a discovery race.
+up=0
+for attempt in 1 2 3; do
+  start "$JOB/nav.pid" ros2 launch reactive_autonomous_nav nav_launch.py \
+        planner:="$PLANNER" controller:="$CONTROLLER" use_sim_time:=true
+  sleep 20
+  if timeout 120 python3 $G/wait_topic.py /global_costmap/costmap OccupancyGrid 100 10000; then
+    up=1
+    break
+  fi
+  echo "    costmap bringup lost its activation race (attempt $attempt), retrying"
+  stop "$JOB/nav.pid"
+  sleep 8
+  timeout 140 python3 $G/wait_tf.py 120 5 > /dev/null || true
+done
+if [ "$up" != "1" ]; then
+  echo "    global costmap never published after 3 attempts -- aborting $TAG"
   exit 1
 fi
+
+# RViz only after the costmaps are up.  It is the heaviest thing on this
+# machine -- software GL, shader compilation, the robot meshes -- and the
+# costmaps activate with a bounded wait for base_link->map that nav2's
+# lifecycle manager turns into a permanent abort when it expires.  Started
+# first, it was still loading through exactly that window: theta_star failed
+# three times that way while smac, launching a lighter planner alongside,
+# survived it.  Nothing needs RViz until the capture begins.
+start "$JOB/rviz.pid" rviz2 -d $G/nav.rviz --ros-args -p use_sim_time:=true
+sleep 35
 
 # /goal_pose is not latched and `pub --once` exits the moment it has written,
 # so a goal sent before the planner has finished building its subscription is
@@ -83,6 +104,7 @@ echo "    /goal_pose subscribers: ${subs:-0}, /cmd_vel_unstamped publishers: ${n
 # about 12 frames a second of simulated time, so the GIF plays at the speed the
 # robot is actually moving.
 C0=$(sim_now)
+T0=$(date +%s.%N)
 start "$JOB/ff.pid" ffmpeg -loglevel error -y -f x11grab -draw_mouse 0 \
       -video_size 912x624 -framerate 6 -i :99+366,65 -t "$WALL" "$RUN/$TAG.mp4"
 sleep 4
@@ -112,9 +134,25 @@ if [ -z "$SPEED" ]; then
 fi
 echo "    sim ${C0}s to ${C1}s over ${WALL}s wall -> playing back ${SPEED}x"
 
+# Trim to the run rather than to the capture window.  Obstacles being visible
+# again -- see the costmap fix -- means DWA now slows near them properly, so a
+# window generous enough for the slowest controller is far longer than the
+# quickest needs, and padding every clip with a stationary robot at the goal
+# would cost megabytes for nothing.  The controller logs "Goal REACHED" with a
+# wall stamp; T0 is the wall time the capture began.
+END=""
+REACH_T=$(grep -m1 "Goal REACHED" "$JOB/nav.log" 2>/dev/null \
+          | grep -oE "\[[0-9]{10}\.[0-9]+\]" | tr -d "[]")
+if [ -n "$REACH_T" ]; then
+  END=$(python3 -c "print(f'{max(8.0, $REACH_T - $T0 + 4):.1f}')")
+  echo "    reached ${END}s into the capture; trimming there"
+fi
+TRIM=""
+[ -n "$END" ] && TRIM="-t $END"
+
 # 48 colours is plenty for RViz's flat fills; 560 px keeps a ten-clip set to a
 # size a repository can carry and still reads at a glance.
-ffmpeg -loglevel error -y -i "$RUN/$TAG.mp4" -vf \
+ffmpeg -loglevel error -y $TRIM -i "$RUN/$TAG.mp4" -vf \
   "setpts=PTS/$SPEED,fps=10,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=48[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3" \
   -loop 0 "$G/gif/$TAG.gif" < /dev/null
 
