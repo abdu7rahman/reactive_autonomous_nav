@@ -77,7 +77,21 @@ class MPPIControllerNode(Node):
         self.dt           = 0.05        # Time step (20 Hz internal model)
         self.num_samples  = 1000        # Number of trajectory samples
         self.temperature  = 0.3         # Softmax temperature (higher = more exploration)
-        self.gamma        = 0.015       # Noise decay factor for time correlation
+        # AR(1) coefficient of the sampled noise, per 0.05 s step.
+        #
+        # This was 0.015, which is nav2's default for a parameter called gamma
+        # that is not this one: nav2's gamma is the control-cost coefficient in
+        # updateControlSequence -- "a trade-off between smoothness (high) and
+        # low energy (low)" -- and it was read here as a noise autocorrelation.
+        # At 0.015 the noise is white, so the integrated control over a 56-step
+        # horizon varies by std/sqrt(56), about a thirtieth of std: all 1000
+        # rollouts are near-copies of the warm-started baseline and the
+        # weighted mean cannot leave it. In the five-robot race that showed as
+        # a fixed point -- r5 held v=-0.02, w=-1.85 (the -1.9 ceiling) for the
+        # rest of the run, spinning in place 2.5 m from its goal, while the
+        # other four finished. 0.9 gives a 0.47 s correlation time, so a
+        # rollout is about six independent segments rather than one.
+        self.noise_corr   = 0.9
 
         # ── Robot kinematic limits ───────────────────────────────────
         self.max_vel       = 0.5
@@ -215,11 +229,28 @@ class MPPIControllerNode(Node):
     def _control_loop(self):
         if self.current_path is None or self.goal_reached:
             return
+
+        # Two of the ways out of this loop used to be silent, and a controller
+        # that stops without saying so cannot be diagnosed at all: in a
+        # five-robot race this one stopped dead at 3.44 m of a 6 m straight,
+        # published nothing further on /cmd_vel_unstamped or
+        # /controller_status, and its whole log for the run was three lines --
+        # the signature, "ready", and "New path: 121 waypoints". The other four
+        # controllers finished. Nothing in the log said which branch it had
+        # taken. Both now stop the robot and say why, throttled.
         if self.path_xy is None or len(self.path_xy) < 2:
+            self._stop()
+            self.get_logger().warn(
+                'Path has fewer than two waypoints left; holding',
+                throttle_duration_sec=2.0)
             return
 
         pose = self._get_robot_pose()
         if pose is None:
+            self._stop()
+            self.get_logger().warn(
+                f'No {self.map_frame} -> {self.base_frame} transform; holding',
+                throttle_duration_sec=2.0)
             return
         self._record_pose(pose[0], pose[1])
 
@@ -253,6 +284,13 @@ class MPPIControllerNode(Node):
         cmd.angular.z = float(optimal_cmd[1])
         self.cmd_pub.publish(cmd)
         self.prev_cmd = optimal_cmd
+
+        # Same line dwa_controller prints, at the same throttle, so two
+        # controllers in one graph can be read side by side.
+        self.get_logger().info(
+            f'v={cmd.linear.x:.2f} ω={cmd.angular.z:.2f} '
+            f'wps={len(self.path_xy)} dist={dist_to_goal:.2f}m',
+            throttle_duration_sec=1.0)
 
     def _prune_path(self, pose):
         """Remove path points that are behind the robot."""
@@ -346,8 +384,10 @@ class MPPIControllerNode(Node):
 
             # Subsequent timesteps: correlated with previous
             for t in range(1, T):
-                noise_v[t] = self.gamma * noise_v[t-1] + np.sqrt(1 - self.gamma**2) * np.random.normal(0, self.std_vel)
-                noise_w[t] = self.gamma * noise_w[t-1] + np.sqrt(1 - self.gamma**2) * np.random.normal(0, self.std_yawrate)
+                a = self.noise_corr
+                b = np.sqrt(1 - a * a)
+                noise_v[t] = a * noise_v[t-1] + b * np.random.normal(0, self.std_vel)
+                noise_w[t] = a * noise_w[t-1] + b * np.random.normal(0, self.std_yawrate)
 
             controls[k, :, 0] = baseline[:, 0] + noise_v
             controls[k, :, 1] = baseline[:, 1] + noise_w

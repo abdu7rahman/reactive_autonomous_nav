@@ -275,6 +275,14 @@ class TEBControllerNode(Node):
 
         pose = self._get_tf(self.map_frame, self.base_frame)
         if pose is None:
+            # A silent return leaves the robot with no new command and the log with
+        # no reason: mppi_controller stopped dead at 3.44 m of a 6 m race
+        # this way and its entire log for the run was three lines. Stop and
+        # say so, throttled.
+            self.cmd_pub.publish(Twist())
+            self.get_logger().warn(
+                f'No {self.map_frame} -> {self.base_frame} transform; holding',
+                throttle_duration_sec=2.0)
             return
         rx, ry, ryaw = pose
         self._record_pose(rx, ry)
@@ -282,6 +290,9 @@ class TEBControllerNode(Node):
         self._advance_wp(rx, ry)
         self._rebuild_band(rx, ry)
         if len(self.band) < 2:
+            self.cmd_pub.publish(Twist())
+            self.get_logger().warn('Band has fewer than two poses; holding',
+                                   throttle_duration_sec=2.0)
             return
 
         if self.costmap_data is not None:
@@ -304,6 +315,9 @@ class TEBControllerNode(Node):
         at_end = self._wp_idx + self.lookahead_wps >= len(self.current_path)
         dts = self._optimise_times(ryaw, stop_at_end=at_end)
         if dts is None:
+            self.cmd_pub.publish(Twist())
+            self.get_logger().warn('No feasible time allocation; holding',
+                                   throttle_duration_sec=2.0)
             return
 
         seg0, dyaw0, dt0 = dts

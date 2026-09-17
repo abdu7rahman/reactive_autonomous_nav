@@ -121,6 +121,14 @@ class PurePursuitControllerNode(Node):
 
         pose = self._get_robot_pose()
         if pose is None:
+            # A silent return leaves the robot with no new command and the log with
+        # no reason: mppi_controller stopped dead at 3.44 m of a 6 m race
+        # this way and its entire log for the run was three lines. Stop and
+        # say so, throttled.
+            self._stop()
+            self.get_logger().warn(
+                f'No {self.map_frame} -> {self.base_frame} transform; holding',
+                throttle_duration_sec=2.0)
             return
         rx, ry, ryaw = pose
         self._record_pose(rx, ry)
@@ -138,6 +146,10 @@ class PurePursuitControllerNode(Node):
         # Find lookahead point
         target = self._get_lookahead_point(rx, ry)
         if target is None:
+            self._stop()
+            self.get_logger().warn(
+                'No lookahead point on the path; holding',
+                throttle_duration_sec=2.0)
             return
 
         # Transform target to robot frame
