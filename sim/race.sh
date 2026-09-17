@@ -162,6 +162,24 @@ cp -f "$JOB/race.log"  "$RUN/log/$TAG.nav.log"   2>/dev/null
 echo "--- result ---"
 sed -n '/finish order/,$p' "$RUN/log/$TAG.timer.log" 2>/dev/null
 
+# A race nobody started is not a clip.  The first chicane race published five
+# reference paths to five subscribers that turned out to be RViz's Path
+# displays, and encoded 3.3 MB of a still grid: every robot at 0.00 m of 5.80.
+# race_timer.py confirms movement against each robot's own odometry now and
+# says how many moved, and a race where any of them did not, or where any of
+# them needed its path sent twice, is worth re-running rather than keeping.
+moved=$(grep -oE "moving after the release: [0-9]+" "$RUN/log/$TAG.timer.log" \
+        2>/dev/null | grep -oE "[0-9]+$")
+if [ "${moved:-0}" != "5" ]; then
+  echo "    only ${moved:-0}/5 robots moved -- $TAG.ts kept, no gif"
+  exit 1
+fi
+if grep -q "not a fair one" "$RUN/log/$TAG.timer.log" 2>/dev/null; then
+  echo "    $(grep -m1 'needed the path sent again' "$RUN/log/$TAG.timer.log")"
+  echo "    -- $TAG.ts kept, no gif"
+  exit 1
+fi
+
 # Play the clip at the speed the robots are actually moving, measured from the
 # simulator's own clock across this capture rather than assumed: it varies with
 # what else is competing for the four cores, and a fixed guess would make the

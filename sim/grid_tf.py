@@ -31,6 +31,10 @@ from reactive_autonomous_nav.race_course import (
     START_Y, YAW, wall_poses)
 
 RATE = 10.0
+# 1 Hz for the markers: they are 18 boxes and 5 strings, and RViz redraws them
+# from its own transform buffer every frame either way, so the rate only has to
+# cover a listener joining late.
+MARKER_RATE = 1.0
 
 
 def _sdf(name, x, y):
@@ -74,16 +78,24 @@ class GridTf(Node):
         # as lidar returns off whichever robot is near one -- which means the
         # opening frame of a clip shows five robots and no course.
         self.wall_pub = self.create_publisher(MarkerArray, '/chicane', latched)
-        self.wall_pub.publish(self._walls())
 
         # And who is who. Five coloured trails with no legend is five coloured
         # trails: the clip is 560 px wide and carries no caption, so the name
         # has to be in the scene. Each label lives in its own robot's base
         # frame, so it follows the robot without anyone publishing its pose.
         self.name_pub = self.create_publisher(MarkerArray, '/race_labels', latched)
-        self.name_pub.publish(self._labels())
 
         self.create_timer(1.0 / RATE, self._tick)
+        # Once each, latched, was the first arrangement, and the first recorded
+        # chicane race came out with no labels at all: a marker with
+        # frame_locked false is transformed into the fixed frame once, when it
+        # arrives, so a label in a moving robot's base frame either freezes
+        # where the robot was or -- if that frame is not in the buffer yet --
+        # is dropped, and RViz does not ask again. Both are now frame-locked
+        # and both are republished, so an RViz started ninety seconds into a
+        # bringup gets them and keeps them attached to what they label.
+        self.create_timer(1.0 / MARKER_RATE, self._markers)
+        self._markers()
         self.get_logger().info(
             f'course {COURSE}: {len(LANES)} odom pins at {RATE:.0f} Hz, '
             f'{len(wall_poses())} chicane walls, {len(LANES)} labels')
@@ -95,6 +107,7 @@ class GridTf(Node):
             m.header.frame_id = 'map'
             m.ns, m.id = 'chicane', i
             m.type, m.action = Marker.CUBE, Marker.ADD
+            m.frame_locked = True
             m.pose.position.x = wx
             m.pose.position.y = gy
             m.pose.position.z = GATE_H / 2
@@ -111,6 +124,7 @@ class GridTf(Node):
             m.header.frame_id = f'{ns}/base_link'
             m.ns, m.id = 'labels', i
             m.type, m.action = Marker.TEXT_VIEW_FACING, Marker.ADD
+            m.frame_locked = True         # follow the robot, not the receipt
             m.pose.position.z = 0.62      # clear of the robot's own tower
             m.pose.orientation.w = 1.0
             m.scale.z = 0.30              # cap height, legible at 560 px
@@ -126,6 +140,10 @@ class GridTf(Node):
         for t in self.msg.transforms:
             t.header.stamp = now
         self.pub.publish(self.msg)
+
+    def _markers(self) -> None:
+        self.wall_pub.publish(self._walls())
+        self.name_pub.publish(self._labels())
 
 
 def main() -> None:

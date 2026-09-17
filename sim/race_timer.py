@@ -26,11 +26,18 @@ A line at 6.0 - 0.15 was measured to be 0.02 m too far: pure_pursuit stopped at
 5.84 and stanley at 5.83, both correctly at their own goal, and both were
 recorded as never having finished.
 
-/goal_pose is not latched and a publisher that exits immediately after writing
-loses the message if the subscriber has not finished matching, so this waits
-for each planner's subscription to appear before it publishes -- a full
-recorded run was once 190 seconds of a robot that had never been told where to
-go.
+Neither /goal_pose nor /plan is latched, and a publisher that writes once
+loses the message if matching has not finished, so this confirms rather than
+counts.  Counting failed twice.  A 190-second recorded run was once a robot
+that had never been told where to go, before any wait existed; and the first
+chicane race waited for `/rN/plan` to have a subscriber, found five of five,
+published, and watched all five robots sit still for twenty-five simulated
+seconds -- because the subscriber it found was RViz's Path display, which
+subscribes to exactly those five topics to draw the reference.  So the wait is
+for a subscription belonging to a node whose name ends in `_controller_node`,
+and after the release each robot's own odometry has to show it moving; one
+that does not gets its path again, and the resend is reported, because a robot
+that started two seconds late did not run the same race as the other four.
 
 What gets released depends on the course.  On the straight it is five goals,
 one per robot, and each robot's own A* plans its way there.  On the chicane it
@@ -74,6 +81,14 @@ FINISH = RACE_LENGTH - GOAL_TOL - COSTMAP_RES
 # killed before it could print its table.
 STALL = 25.0
 MOVED = 0.01
+
+# How long to give a robot to start moving before assuming it never got its
+# path, in simulated seconds.  The controllers run at 10 Hz and every one of
+# them commands a non-zero velocity within a tick or two of receiving a plan --
+# measured in bench/test_chicane.py, where all five are moving by step 3 -- so
+# 3 s is thirty ticks of margin rather than a guess.
+CONFIRM = 3.0
+RESENDS = 3
 
 
 class Timer(Node):
@@ -126,16 +141,65 @@ class Timer(Node):
                 f'{ns} crossed at {self.finished[ns]:.1f} s '
                 f'({len(self.finished)}/{len(GRID)})')
 
+    def _listeners(self) -> int:
+        """Robots whose own controller is subscribed to what we are about to
+        publish.
+
+        By node name, not by count.  On a gated course the release goes to
+        /<ns>/plan, and so does RViz: five Path displays, one per lane, which
+        made a count of subscribers read 5/5 with no controller listening at
+        all.  get_subscriptions_info_by_topic carries the node name, so the
+        question can be asked properly.
+        """
+        ready = 0
+        for ns in self.release_pubs:
+            topic = f'/{ns}/plan' if GATES else f'/{ns}/goal_pose'
+            want = '_controller_node' if GATES else '_planner_node'
+            ready += any(e.node_name.endswith(want)
+                         for e in self.get_subscriptions_info_by_topic(topic))
+        return ready
+
     def wait_for_listeners(self, secs: float) -> int:
         end = time.time() + secs
         while time.time() < end:
             rclpy.spin_once(self, timeout_sec=0.2)
-            ready = sum(1 for p in self.release_pubs.values()
-                        if p.get_subscription_count() >= 1)
-            if ready == len(GRID):
-                return ready
-        return sum(1 for p in self.release_pubs.values()
-                   if p.get_subscription_count() >= 1)
+            if self._listeners() == len(GRID):
+                # Discovery knowing about a subscription and this publisher
+                # having matched it are not the same instant.  Two seconds is
+                # far more than the gap measured here and costs nothing: the
+                # clock starts after it.
+                end2 = time.time() + 2.0
+                while time.time() < end2:
+                    rclpy.spin_once(self, timeout_sec=0.2)
+                return len(GRID)
+        return self._listeners()
+
+    def confirm_moving(self) -> list[str]:
+        """Release, then make sure every robot actually took it.
+
+        Returns the robots that needed the path sent more than once, which is
+        a fairness problem rather than a failure -- a robot given its path
+        three seconds late is three seconds behind for a reason that has
+        nothing to do with its controller -- so the caller reports it and the
+        race is worth re-running.
+        """
+        late: list[str] = []
+        for attempt in range(RESENDS):
+            missing = [ns for ns, _x, _c in GRID if self.progress[ns] < MOVED]
+            if not missing:
+                break
+            if attempt:
+                late += [ns for ns in missing if ns not in late]
+                for ns in missing:
+                    self.release_pubs[ns].publish(
+                        self._plan(ns) if GATES else self._goal(dict(
+                            (n, x) for n, x, _c in GRID)[ns]))
+                print(f'  resent to {" ".join(missing)} '
+                      f'(attempt {attempt + 1})', flush=True)
+            deadline = self.sim + CONFIRM
+            while self.sim < deadline and rclpy.ok():
+                rclpy.spin_once(self, timeout_sec=0.2)
+        return late
 
     def _goal(self, x: float) -> PoseStamped:
         m = PoseStamped()
@@ -191,8 +255,15 @@ def main() -> int:
     if start:
         ready = t.wait_for_listeners(120)
         topic = '/plan' if GATES else '/goal_pose'
-        print(f'listening on {topic}: {ready}/{len(GRID)}', flush=True)
+        print(f'controllers listening on {topic}: {ready}/{len(GRID)}'
+              if GATES else
+              f'planners listening on {topic}: {ready}/{len(GRID)}', flush=True)
         t.release()
+        late = t.confirm_moving()
+        moving = sum(1 for ns, _x, _c in GRID if t.progress[ns] >= MOVED)
+        print(f'moving after the release: {moving}/{len(GRID)}'
+              + (f' -- {" ".join(late)} needed the path sent again, so this '
+                 f'race is not a fair one' if late else ''), flush=True)
     else:
         # --no-start is the start-line check race.sh runs before the nav stack
         # exists, so there is nothing to wait for and waiting out the full 120 s
