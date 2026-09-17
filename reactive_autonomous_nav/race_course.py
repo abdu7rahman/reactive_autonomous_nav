@@ -86,10 +86,13 @@ ENTRANTS = FIELDS[FIELD]
 # it is drawn over a robot in a 560 px clip: the plugin's own class name is the
 # thing that identifies it, so the label is its last component with the
 # repeated package prefix taken off.
-_SHORT = {'DWBLocalPlanner': 'nav2 dwb',
-          'MPPIController': 'nav2 mppi',
-          'RegulatedPurePursuitController': 'nav2 pursuit',
-          'GracefulController': 'nav2 graceful'}
+# One token each, no spaces.  RViz's TEXT_VIEW_FACING breaks a label on its
+# spaces, so "dwa c++" and "nav2 pursuit" came out stacked on two lines and
+# crowded the lanes either side of them at 560 px.
+_SHORT = {'DWBLocalPlanner': 'nav2-dwb',
+          'MPPIController': 'nav2-mppi',
+          'RegulatedPurePursuitController': 'nav2-pursuit',
+          'GracefulController': 'nav2-graceful'}
 
 
 _MIXED = any(k == 'cpp' for k, _s in ENTRANTS.values())
@@ -106,9 +109,9 @@ def _label(kind, spec):
     clip needs to tell them apart.
     """
     if kind == 'cpp':
-        return f'{spec} c++'
+        return f'{spec}-c++'
     if kind == 'pkg':
-        return f'{spec} python' if _MIXED else spec
+        return f'{spec}-py' if _MIXED else spec
     return _SHORT[spec.rsplit('::', 1)[1]]
 
 

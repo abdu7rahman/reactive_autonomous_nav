@@ -4,6 +4,12 @@
     grid_tf.py --lanes        print the course as shell assignments
     grid_tf.py --gates        print one gz EntityFactory request per wall
 
+The controller name labels are not here: they belong to whoever is racing
+rather than to the course, and this node is started by race_up.sh, which brings
+a grid up without being told what will race on it.  The first versus clip was
+recorded with the five labels of the wrong field for exactly that reason.  They
+are in sim/trail.py, which race.sh starts.
+
 Where the course is defined is not here -- it is
 reactive_autonomous_nav/race_course.py, which the launch file reads too.  This
 is what puts it into the graph: race_up.sh spawns the walls from --gates and
@@ -27,8 +33,8 @@ from tf2_msgs.msg import TFMessage
 from visualization_msgs.msg import Marker, MarkerArray
 
 from reactive_autonomous_nav.race_course import (
-    COLOUR, CONTROLLER, COURSE, GATE_H, GATE_T, GATE_W, LANES, RACE_LENGTH,
-    START_Y, YAW, wall_poses)
+    COURSE, GATE_H, GATE_T, GATE_W, LANES, RACE_LENGTH, START_Y, YAW,
+    wall_poses)
 
 RATE = 10.0
 # 1 Hz for the markers: they are 18 boxes and 5 strings, and RViz redraws them
@@ -79,12 +85,6 @@ class GridTf(Node):
         # opening frame of a clip shows five robots and no course.
         self.wall_pub = self.create_publisher(MarkerArray, '/chicane', latched)
 
-        # And who is who. Five coloured trails with no legend is five coloured
-        # trails: the clip is 560 px wide and carries no caption, so the name
-        # has to be in the scene. Each label lives in its own robot's base
-        # frame, so it follows the robot without anyone publishing its pose.
-        self.name_pub = self.create_publisher(MarkerArray, '/race_labels', latched)
-
         self.create_timer(1.0 / RATE, self._tick)
         # Once each, latched, was the first arrangement, and the first recorded
         # chicane race came out with no labels at all: a marker with
@@ -98,7 +98,7 @@ class GridTf(Node):
         self._markers()
         self.get_logger().info(
             f'course {COURSE}: {len(LANES)} odom pins at {RATE:.0f} Hz, '
-            f'{len(wall_poses())} chicane walls, {len(LANES)} labels')
+            f'{len(wall_poses())} chicane walls')
 
     def _walls(self) -> MarkerArray:
         ma = MarkerArray()
@@ -117,24 +117,6 @@ class GridTf(Node):
             ma.markers.append(m)
         return ma
 
-    def _labels(self) -> MarkerArray:
-        ma = MarkerArray()
-        for i, ns in enumerate(LANES):
-            m = Marker()
-            m.header.frame_id = f'{ns}/base_link'
-            m.ns, m.id = 'labels', i
-            m.type, m.action = Marker.TEXT_VIEW_FACING, Marker.ADD
-            m.frame_locked = True         # follow the robot, not the receipt
-            m.pose.position.z = 0.62      # clear of the robot's own tower
-            m.pose.orientation.w = 1.0
-            m.scale.z = 0.30              # cap height, legible at 560 px
-            r, g, b = COLOUR[ns]
-            m.color.r, m.color.g, m.color.b = r / 255.0, g / 255.0, b / 255.0
-            m.color.a = 1.0
-            m.text = CONTROLLER[ns]
-            ma.markers.append(m)
-        return ma
-
     def _tick(self) -> None:
         now = self.get_clock().now().to_msg()
         for t in self.msg.transforms:
@@ -143,7 +125,6 @@ class GridTf(Node):
 
     def _markers(self) -> None:
         self.wall_pub.publish(self._walls())
-        self.name_pub.publish(self._labels())
 
 
 def main() -> None:
