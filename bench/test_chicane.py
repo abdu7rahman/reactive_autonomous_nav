@@ -23,6 +23,7 @@ course.
 """
 import math
 import os
+import re
 import sys
 
 import numpy as np
@@ -49,6 +50,8 @@ def _sig():
 
 
 LETHAL = 253
+CONFIG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      'config', 'race_costmap_params.yaml')
 MARGIN_X = 1.8      # metres of map either side of the lane centre: the
                     # neighbour's wall at a gate sits 1.25 m out and is 0.30 m
                     # wide, so 1.8 holds it with a cell to spare
@@ -62,6 +65,31 @@ MARGIN_Y = 0.3
 # clearances below are reported against the real 0.22 as well.
 INSCRIBED_CELLS = int(ROBOT_RADIUS / COSTMAP_RES)       # 4
 INFLATION_CELLS = int(round(INFLATION / COSTMAP_RES))   # 6
+
+
+def config_agrees():
+    """race_course's costmap constants against the costmaps' own config.
+
+    ROBOT_RADIUS, INFLATION and COSTMAP_RES are declared in race_course.py
+    with a comment pointing at config/race_costmap_params.yaml, and every
+    clearance number in this file and in sim/race_path.py is measured against
+    them.  Change the yaml and nothing would notice: the reference path would
+    be checked against an inflation the costmaps no longer use, and the check
+    would keep passing.  So it is checked.
+    """
+    text = open(CONFIG).read()
+    want = {'robot_radius': ROBOT_RADIUS, 'inflation_radius': INFLATION,
+            'resolution': COSTMAP_RES}
+    bad = []
+    for key, mine in want.items():
+        found = {float(v) for v in re.findall(rf'^\s*{key}:\s*([0-9.]+)\s*$',
+                                              text, re.M)}
+        if not found:
+            bad.append(f'{key}: not in the config at all')
+        elif found != {mine}:
+            bad.append(f'{key}: race_course says {mine}, the config says '
+                       f'{sorted(found)}')
+    return bad
 
 
 def relative_walls():
@@ -137,6 +165,14 @@ def main():
         return 0
 
     fails = 0
+    bad = config_agrees()
+    for line in bad:
+        print(f'  FAIL config: {line}')
+    fails += len(bad)
+    if not bad:
+        print(f'costmap config agrees: robot radius {ROBOT_RADIUS} m, '
+              f'inflation {INFLATION} m, {COSTMAP_RES} m cells')
+
     grid = chicane_grid()
     pts = race_path.centreline()
     ref_gap = min(wall_gap(x, y) for x, y in pts)
