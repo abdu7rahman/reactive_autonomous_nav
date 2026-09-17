@@ -12,12 +12,19 @@ G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 mkdir -p $G/gif $G/run/log
 SECS=${SECS:-260}
 
+# Skip a clip that is already recorded, so a batch stopped halfway can be
+# restarted without paying again for the runs that already worked.  Delete the
+# gif to force a re-record.
 run() {  # planner controller tag
-  bash $G/drive.sh "$1" "$2" "$3" "$SECS" 2>&1 | grep -vE "^\[[0-9]+\]" \
-    | tee -a $G/run/log/batch.txt
+  if [ -s "$G/gif/$3.gif" ]; then
+    echo "=== $3 : already recorded, skipping" | tee -a $G/run/log/batch.txt
+    return
+  fi
+  stdbuf -oL bash $G/drive.sh "$1" "$2" "$3" "$SECS" 2>&1 \
+    | stdbuf -oL grep -vE "^\[[0-9]+\]" | tee -a $G/run/log/batch.txt
 }
 
-: > $G/run/log/batch.txt
+touch $G/run/log/batch.txt
 
 for p in astar theta_star smac rrt rrt_smac_hybrid; do
   run "$p" dwa "planner-$p"
