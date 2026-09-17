@@ -49,6 +49,64 @@ Custom reactive autonomous navigation stack for TurtleBot4, built on ROS2 Jazzy.
 
 ---
 
+## In simulation
+
+Every planner and every controller above, driving a TurtleBot 4 through
+`turtlebot4_gz_bringup`'s warehouse world on ROS 2 Jazzy and Gazebo Harmonic.
+One run each, same start and same goal: out of the open floor at the world
+origin, around the barrier at y = -1.8, and down the aisle between the racks to
+(2.0, -3.2). Orange is the global plan and white is the robot's footprint;
+green, the line it actually drove, appears only in the DWA clips, because
+dwa_controller is the only one of the five that publishes /driven_path.
+
+Rendering is software, so the world runs far slower than real time. Each clip
+is played back at the factor measured from the simulator's own clock across
+that capture, so the robot moves at the speed it actually moves.
+
+### Global planners, DWA driving
+
+| A* | Theta* |
+|---|---|
+| ![A*](sim/gif/planner-astar.gif) | ![Theta*](sim/gif/planner-theta_star.gif) |
+
+| SMAC | RRT |
+|---|---|
+| ![SMAC](sim/gif/planner-smac.gif) | ![RRT](sim/gif/planner-rrt.gif) |
+
+| RRT-SMAC hybrid | |
+|---|---|
+| ![RRT-SMAC hybrid](sim/gif/planner-rrt_smac_hybrid.gif) | |
+
+### Local controllers, A* planning
+
+| DWA | Pure Pursuit |
+|---|---|
+| ![DWA](sim/gif/controller-dwa.gif) | ![Pure Pursuit](sim/gif/controller-pure_pursuit.gif) |
+
+| Stanley | TEB |
+|---|---|
+| ![Stanley](sim/gif/controller-stanley.gif) | ![TEB](sim/gif/controller-teb.gif) |
+
+| MPPI | |
+|---|---|
+| ![MPPI](sim/gif/controller-mppi.gif) | |
+
+`astar` with `dwa` is the same configuration in both halves, so it is recorded
+once and shown twice rather than run twice — two runs of one pair would differ
+only by simulator noise, and putting them side by side would invite reading
+that noise as a result.
+
+Localisation is the simulator's ground truth rather than a particle filter, and
+the Create 3 reflex layer is bypassed: it latches a false cliff in this world
+and replaces every command with a backward escape. Neither is a shortcut around
+the planners — both are described, with the measurements behind them, in
+[`sim/README.md`](sim/README.md), along with the harness and the rest of what
+had to be true before the robot would move at all. Running the stack in
+simulation is also what turned up the two bugs fixed in `fix(costmap)` and
+`fix(theta_star)`, neither of which the offline benchmarks could see.
+
+---
+
 ## How it compares
 
 Everything below is reproducible from `bench/`. Numbers were taken on an Intel

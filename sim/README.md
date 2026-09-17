@@ -16,12 +16,38 @@ robot moving at the speed it actually moves.
 
 ```bash
 bash sim/sim_up.sh                       # world, robot, clock, map, localiser
-bash sim/drive.sh astar dwa my-run 260   # one clip -> sim/gif/my-run.gif
+bash sim/drive.sh astar dwa my-run 300   # one clip -> sim/gif/my-run.gif
 bash sim/all.sh                          # all ten
 ```
 
 `sim_up.sh` is a one-off; `drive.sh` may be run repeatedly against it and
 resets the robot to the warehouse origin each time.
+
+## The runs
+
+Nine runs, one per configuration, all reaching (2.0, -3.2) from the world
+origin. astar with dwa is recorded once and shown in both halves.
+
+| clip | arrival, seconds into its capture |
+|---|---|
+| planner-astar (= controller-dwa) | 123.1 |
+| planner-theta_star | 132.4 |
+| planner-smac | 124.5 |
+| planner-rrt | 168.0 |
+| planner-rrt_smac_hybrid | 213.3 |
+| controller-pure_pursuit | 119.3 |
+| controller-stanley | 134.9 |
+| controller-teb | 124.6 |
+| controller-mppi | 160.2 |
+
+These are wall seconds of capture, not a comparison between controllers: the
+world runs at a real-time factor near 0.13 and what else is on the four cores
+varies between runs, so the same configuration would not repeat these to better
+than a few seconds. They are here to say the runs finished, and where each clip
+was cut.
+
+Only dwa_controller publishes /driven_path, so the green trail behind the robot
+appears in the DWA clips and not the other four.
 
 ## What the simulator needed before any of this would move
 
@@ -75,7 +101,7 @@ do.
 measurement that is about planners and controllers, and the dock episode above
 is what happens when wheel odometry is trusted alone.
 
-## Two things the exercise found in the package itself
+## Three things the exercise found in the package itself
 
 **Every lethal-obstacle threshold was unreachable.** The planners, DWA and MPPI
 compare costmap cells against `LETHAL_COST = 253`, which is the raw nav2 0-255
@@ -97,6 +123,15 @@ inverting nav2's own forward map (`255 -> -1, 254 -> 100, 253 -> 99, else
 c*99/252`). No threshold changed. `bench/` feeds grids straight into
 `node.global_data` and never goes through these callbacks, so the benchmark
 path is untouched — `bench/test_planners.py` still reports `all checks passed`.
+
+**TEB told nobody it had arrived.** teb_controller published its status on
+/teb_status while every planner subscribes to /dwa_status -- which dwa,
+pure_pursuit, stanley and mppi all publish on, the name being historical rather
+than DWA-specific. So no planner ever heard TEB reach the goal, the planner's
+"stopping replanning" never fired, and it went on issuing a fresh path from the
+robot's position for the rest of the run. It is visible in a recording: the
+plan redraws after the robot has already stopped, and the clip compresses to
+eight times the size of the same route under any other controller.
 
 **Theta\*'s paths were too sparse for the controllers that consume them.** With
 the walls visible again it routed around the barrier correctly, as four
