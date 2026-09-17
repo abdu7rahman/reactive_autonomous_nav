@@ -125,7 +125,13 @@ class TEBControllerNode(Node):
 
         self.cmd_pub    = self.create_publisher(Twist,       '/cmd_vel_unstamped', 10)
         self.band_pub   = self.create_publisher(MarkerArray, '/teb_band',          10)
-        self.status_pub = self.create_publisher(String,      '/teb_status',        10)
+        # /dwa_status is what every planner subscribes to for controller status,
+        # and dwa, pure_pursuit, stanley and mppi all publish on it; the name is
+        # historical rather than DWA-specific. TEB publishing to /teb_status
+        # instead meant no planner ever heard it arrive, so replanning never
+        # stopped: the run reached the goal and the planner kept issuing fresh
+        # paths from the robot's position for the rest of the capture.
+        self.status_pub = self.create_publisher(String,      '/dwa_status',        10)
 
         self.create_subscription(Odometry,      '/odom',                  self._odom_cb,    10)
         self.create_subscription(Path,          '/plan',                  self._path_cb,    10)
