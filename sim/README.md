@@ -1,10 +1,11 @@
 # Running the stack in Gazebo
 
-Ten recordings of this package driving a TurtleBot 4 through the warehouse
+Eleven recordings of this package driving TurtleBot 4s through the warehouse
 world: five global planners against one controller, five local controllers
-against one planner. Every clip is one run of `nav_launch.py` with nothing
-stubbed — the same nodes, the same costmaps, the same `/goal_pose` in and
-`/cmd_vel_unstamped` out as on hardware.
+against one planner, and then all five controllers at once, on five robots, in
+a race up the same six-metre straight. Every clip is one run of `nav_launch.py`
+or `race_launch.py` with nothing stubbed — the same nodes, the same costmaps,
+the same `/goal_pose` in and `/cmd_vel_unstamped` out as on hardware.
 
 ROS 2 Jazzy, Gazebo Harmonic 8.15.0, `turtlebot4_gz_bringup`'s warehouse world,
 TurtleBot 4 standard. Rendering is software (llvmpipe), which is why the world
@@ -46,8 +47,172 @@ varies between runs, so the same configuration would not repeat these to better
 than a few seconds. They are here to say the runs finished, and where each clip
 was cut.
 
-Only dwa_controller publishes /driven_path, so the green trail behind the robot
-appears in the DWA clips and not the other four.
+The green trail behind the robot appears in the DWA clips and not the other
+four: at the time these ten were recorded dwa_controller was the only one
+publishing /driven_path. All five do now -- the five-robot race is five
+coloured trails -- but these clips predate that and have not been re-recorded.
+
+## The five-robot race
+
+Five TurtleBot 4s on a start line, one global planner each, a different local
+controller each, and the same goal six metres directly ahead of every one of
+them.
+
+```bash
+bash sim/race_up.sh      # warehouse, five robots, clock, odom pins
+bash sim/race.sh 600     # costmaps, planners, controllers, RViz, capture
+```
+
+`race_up.sh` is a one-off per race. Odometry starts where a robot was spawned
+and nothing in this stack can put it back, so a second race needs a fresh
+bringup; `race.sh` refuses to start otherwise and says so.
+
+| lane | controller | finished |
+|---|---|---|
+| r1 | dwa | 13.2 - 13.3 s |
+| r4 | teb | 14.9 - 15.0 s |
+| r2 | pure_pursuit | 17.3 - 17.4 s |
+| r3 | stanley | 17.3 - 17.4 s |
+| r5 | mppi | did not finish |
+
+Simulated seconds from the grid release to the finish line, over five races.
+The four that finish are repeatable to a tenth of a second, which they should
+be: the straight is clear, the goals are the same distance away, and nothing in
+the run is random. MPPI is not a slow finisher, it is a failure, and it is
+described below.
+
+**The race is timed against the robots' own odometry, not their logs.** Each
+robot's odom frame is created where it spawned with x along the heading it
+spawned in, so odom x is distance up the straight -- the same quantity for all
+five, with no transform and no localiser in between. `race_timer.py` sends all
+five goals from one process, because a grid released over four wall seconds at
+a real-time factor near 0.3 is more than a second of simulated head start,
+which is a tenth of the race.
+
+The finish line is at 5.80 m for a 6.0 m goal: the goal distance, less the
+0.15 m tolerance every controller in this package stops inside, less one 0.05 m
+costmap cell, because the controllers measure their arrival against the
+planner's last waypoint and that waypoint is a cell centre rather than the goal
+pose. A line at 6.00 - 0.15 was measured to be 0.02 m too far -- pure_pursuit
+stopped at 5.84 and stanley at 5.83, both correctly at their own goals, and
+both were recorded as never having finished.
+
+### Where the grid sits, and why it moved
+
+The first straight ran from y = 1 to y = 7 with the lanes centred on x = 0, and
+there is a wall across all five of those lanes at y = 7.9 -- 0.9 m past the
+finish. MPPI rolls 56 steps of 0.05 s, so 2.8 s, which at its ceiling is about
+1.3 m of lookahead: the wall was inside its horizon for the whole last second
+of the race. `shelf_big_3` at (3.5, 9.5) sat beside lane 5 and beside no other,
+so the straight was not the same race for all five.
+
+Scanning the warehouse's own occupancy map for the longest corridor with no
+occupied and no unknown cell across the full 6.4 m the five lanes and a robot
+radius need: lanes centred on x = 0 give 8.6 m of it, lanes centred on x = -3
+give 9.4 m. The grid runs from y = -1 to y = 5 on the second, which leaves
+2.8 m of run-off past the finish -- twice MPPI's horizon -- and 0.6 m behind
+the grid. `grid_tf.py` holds those numbers, and `race_up.sh` and
+`race_timer.py` read them from it rather than keeping copies.
+
+It made no difference to MPPI.
+
+### Not the stock five-robot bringup
+
+`turtlebot4_spawn.launch.py` five times over does not fit on four cores. It was
+tried first and the logs say what happened: r1 came up, r2's model loaded into
+the physics engine but its `controller_manager` sat on `Waiting for data on
+'/r2/robot_description'` for eleven minutes, and r3, r4 and r5 never reached
+the engine at all while the server printed `SceneBroadcaster: Timed out waiting
+for state`. Each stock robot is about forty-five nodes -- hazard vectors, IR
+vectors, a UI manager, a kidnap estimator, a 1000 Hz ros2_control loop -- and
+twelve gpu_lidars. Five of those is 225 nodes and 60 raycast sensors, and
+FastDDS ran out of shared-memory ports underneath it.
+
+`race_robot.py` emits the same robot with the parts a controller comparison
+uses. Same description, same meshes, same masses, same wheel geometry; Gazebo's
+own DiffDrive in place of ros2_control, carrying the numbers the Create 3
+controller was configured with (0.233 m wheel separation, 0.03575 m radius,
+0.46 m/s and 1.9 rad/s ceilings, 0.9 m/s² and 7.725 rad/s² acceleration
+limits), so the dynamics are identical and there is no `robot_description`
+handshake to lose. One lidar instead of twelve: the other eleven are Create 3
+reflex inputs, and that reflex layer is also what latched a false CLIFF in this
+world and had to be killed on every single-robot run, so removing the sensors
+removes the problem at its root rather than killing the node that acts on it.
+Four processes per robot rather than forty-five, and the real-time factor with
+five robots measured 0.11 to 0.29 -- the same range a single stock robot ran at.
+
+### Four things the five-robot graph broke that one robot did not
+
+**The shared-memory transport ran out of ports.** Past about fifty
+participants, every new one logged `Failed init_port fastrtps_port7000:
+open_and_lock_file failed` and discovery stopped completing: five costmap
+lifecycle managers sat on `Waiting for service
+/r1/local_costmap/local_costmap/get_state` for eight minutes while `ros2
+service list` listed that exact service, and a direct `ros2 service call` to it
+timed out. /dev/shm was 93 MB used of 16 GB and the file limit was 20000, so it
+was the transport's own port table rather than anything the machine ran out of.
+`fastdds_udp.xml` turns the shared-memory transport off; loopback UDP costs
+throughput that nothing here is near using, the largest message in the graph
+being a 400x400 costmap at 5 Hz.
+
+**/tf_static did not deliver.** The five `map -> <ns>/odom` pins started life as
+five `static_transform_publisher` processes, which together with five
+`robot_state_publisher` trees and five lidar identities put fifteen
+transient-local publishers on one topic. A freshly started listener received
+some of the latched samples and not others -- measured with nothing but tf2
+involved, `tf2_echo map r1/base_link` resolved and r2 through r5 all reported
+`Tf has two or more unconnected trees` -- and downstream that read as nav2
+costmaps failing to activate with `Invalid frame ID "map" passed to
+canTransform`, one to four robots per attempt, different ones each time.
+`grid_tf.py` publishes all five from one node on `/tf` at 10 Hz instead, which
+is where a localiser publishes `map -> odom` anyway. The lidar identities are
+gone too: `race_robot.py` sets `gz_frame_id` and the scan was measured arriving
+stamped `r3/rplidar_link`.
+
+**nav2's lifecycle manager aborts permanently.** It brings its whole list up at
+once and treats one failure as final -- `Failed to bring up all requested
+nodes. Aborting bringup`, no retry -- so one robot losing a service call costs
+the entire race. With five managers and ten costmaps the failure was not a
+timeout waiting for anything, it was `async_send_request failed`, the request
+never leaving the client. Three consecutive bringups were thrown away that way,
+reporting two, then four, then four of five pairs active. `costmap_up.py`
+configures and activates the ten costmaps itself, one at a time and retrying
+each transition, and reports which of the ten are active. The first race after
+that reported 10/10 on the first attempt.
+
+**The costmap node's namespace is not the robot's.** `nav2_costmap_2d` puts its
+lifecycle node inside a sub-namespace of its own name, so a node given
+`namespace='/r1'` comes up as `/r1/local_costmap` and anything driving
+`/r1/local_costmap/local_costmap` waits forever. It is also what puts the
+published topics where the remappings expect them.
+
+### MPPI
+
+MPPI is the one controller that does not finish, and it fails the same way
+every time: somewhere between 3.4 m and 5.0 m of the six it holds a saturated
+yaw rate at a near-zero speed and spins on the spot until the clock runs out.
+One run held `v=-0.02 w=-1.85` against a 1.9 rad/s limit for the rest of the
+race with its goal 2.5 m ahead.
+
+That is visible at all only because of a change made while chasing it. All five
+control loops had branches that returned with no command and no log -- no
+transform, no lookahead point, a path or a band with fewer than two poses, no
+feasible time allocation -- so MPPI's entire log for its first failed race was
+three lines: the signature, `ready`, and `New path: 121 waypoints`. Each branch
+now brakes and says why, and MPPI prints the same per-tick line DWA does.
+
+One hypothesis has been tested and rejected. The noise sampler's AR(1)
+coefficient was 0.015, which is nav2's default for a parameter called `gamma`
+that is not this one -- nav2's `gamma` is the control-cost coefficient in
+`updateControlSequence`, "a trade-off between smoothness (high) and low energy
+(low)" -- so the name came across and the meaning did not. At 0.015 the noise
+is white over a 2.8 s horizon and every rollout is a near-copy of the
+warm-started baseline, which would explain a weighted mean that cannot leave
+its own warm start. Raising it to 0.9, for a 0.475 s correlation time, measured
+worse and fixed nothing: rooms-200 went 654 to 671 steps and 20.81 to 21.06 m
+against a run-to-run spread of about four steps, and the race still stalled,
+4.07 m before and 3.57 m after. Reverted, with the numbers in the comment.
+Whatever holds MPPI on that straight, it is not sample diversity.
 
 ## What the simulator needed before any of this would move
 
@@ -190,7 +355,16 @@ hoping.
 | `wait_topic.py` | block until a topic delivers, instead of sleeping |
 | `watch.py` | the robot's map pose and distance to goal, live |
 | `nav.rviz` | one view covering every planner's and controller's own markers |
-| `lib.sh` | process helpers |
+| `lib.sh` | process helpers, and the Fast DDS profile every process picks up |
+| `race_up.sh` | the warehouse, five robots, the clock bridge and the odom pins |
+| `race.sh` | the race: costmaps, planners, controllers, RViz, capture, encode |
+| `stoprace.sh` | stop a race and everything it started, leaving the world up |
+| `race_robot.py` | the TurtleBot 4 description, stripped to what a race uses |
+| `grid_tf.py` | where the grid is, and the transforms that pin it into `map` |
+| `costmap_up.py` | the ten costmaps through their lifecycle, one at a time |
+| `race_timer.py` | releases the grid and times it against the robots' odometry |
+| `race.rviz` | all five robots in one view, one colour each |
+| `fastdds_udp.xml` | UDP only, because shared memory ran out of ports |
 
 `clean.sh` and `lib.sh` are more careful about killing processes than they look
 like they need to be. A pattern typed on a command line also appears in the

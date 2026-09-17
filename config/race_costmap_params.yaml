@@ -24,6 +24,12 @@
     ros__parameters:
       global_frame: map
       robot_base_frame: __NS__/base_link
+      # How long activation waits for base_frame -> global_frame before the
+      # lifecycle manager calls the whole bringup failed and stops retrying.
+      # The default is 10 s of half-second attempts, which was not enough here
+      # with five robots' transforms arriving at once, and the cost of a
+      # generous value is a slow start rather than a wrong one.
+      initial_transform_timeout: 60.0
       update_frequency: 10.0
       publish_frequency: 10.0
       width: 6
@@ -61,6 +67,12 @@
     ros__parameters:
       global_frame: map
       robot_base_frame: __NS__/base_link
+      # How long activation waits for base_frame -> global_frame before the
+      # lifecycle manager calls the whole bringup failed and stops retrying.
+      # The default is 10 s of half-second attempts, which was not enough here
+      # with five robots' transforms arriving at once, and the cost of a
+      # generous value is a slow start rather than a wrong one.
+      initial_transform_timeout: 60.0
       update_frequency: 5.0
       publish_frequency: 5.0
       width: 20

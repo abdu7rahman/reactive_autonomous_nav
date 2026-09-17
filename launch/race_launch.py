@@ -15,9 +15,20 @@ name their topics absolutely -- '/plan', '/odom' -- and a leading slash is
 immune to a namespace push, so those are remapped explicitly; /tf is not,
 deliberately.
 
+No lifecycle manager either: sim/costmap_up.py configures and activates the
+ten costmaps itself, one at a time and retrying each transition, and its
+header records what nav2_lifecycle_manager did instead -- one lost service
+call on one robot aborting the whole bringup, permanently, on most attempts.
+
 Nothing here serves a map or runs a localiser. The costmaps roll with the
 robot, the transform into `map` is the spawn pose rather than an estimate of
 it, and the only obstacles on the straight are the other four robots.
+
+The five stacks come up together.  Staggering them twenty seconds apart was
+tried, on the theory that twenty-five nodes appearing at once starved
+discovery; it was the wrong diagnosis and did not help.  What was actually
+wrong was /tf_static delivery -- see sim/grid_tf.py -- and it is fixed at the
+source.
 
 sim/race_timer.py sends the goals, one per robot, each the same distance
 directly ahead of the robot that gets it. Equal distances are as fair as a
@@ -31,17 +42,16 @@ from ament_index_python.packages import get_package_share_directory
 import os
 import tempfile
 
-# lane, controller. Lanes are 1.3 m apart: the robot is 0.34 m across and
-# carries a 0.30 m inflation, so anything tighter starts the race with every
-# robot already inside its neighbour's forbidden zone. The lane x values live
-# in sim/race_up.sh, which spawns them, and in sim/race_timer.py, which places
-# each goal directly ahead of the robot that gets it.
+# Which controller is in which lane. Where the lanes are is not here: that is
+# sim/grid_tf.py, which spawns them, pins their odom origins into `map` and
+# places the goals, and which records how the grid's position was measured
+# against the warehouse's own occupancy map.
 GRID = [
-    ('r1', -2.6, 'dwa_controller'),
-    ('r2', -1.3, 'pure_pursuit_controller'),
-    ('r3',  0.0, 'stanley_controller'),
-    ('r4',  1.3, 'teb_controller'),
-    ('r5',  2.6, 'mppi_controller'),
+    ('r1', 'dwa_controller'),
+    ('r2', 'pure_pursuit_controller'),
+    ('r3', 'stanley_controller'),
+    ('r4', 'teb_controller'),
+    ('r5', 'mppi_controller'),
 ]
 
 VIZ = ['/astar_markers', '/astar_explored', '/astar_status', '/replan_request',
@@ -76,7 +86,7 @@ def generate_launch_description():
     pkg = get_package_share_directory('reactive_autonomous_nav')
     ld = LaunchDescription()
 
-    for ns, _lane, controller in GRID:
+    for ns, controller in GRID:
         frames = {'map_frame': 'map',
                   'odom_frame': f'{ns}/odom',
                   'base_frame': f'{ns}/base_link'}
@@ -91,30 +101,14 @@ def generate_launch_description():
             # single-robot launch says namespace='local_costmap',
             # name='local_costmap' for the same reason -- so a node given only
             # /r1 comes up as /r1/local_costmap and the manager waits forever
-            # on /r1/local_costmap/local_costmap/get_state. It also puts the
+            # on /r1/local_costmap/local_costmap/get_state, which is the name
+            # sim/costmap_up.py drives. It also puts the
             # published topics where the remappings expect them:
             # /r1/local_costmap/costmap, /r1/local_costmap/published_footprint.
             ld.add_action(Node(
                 package='nav2_costmap_2d', executable='nav2_costmap_2d',
                 name=which, namespace=f'{ns}/{which}', output='screen',
                 parameters=[cm_cfg, {'use_sim_time': True}]))
-
-        ld.add_action(Node(
-            package='nav2_lifecycle_manager', executable='lifecycle_manager',
-            name='lifecycle_manager_costmap', namespace=ns, output='screen',
-            parameters=[{'use_sim_time': True}, {'autostart': True},
-                        # bond_timeout 0 disables the heartbeat, as the
-                        # single-robot launch does: with twenty-five nodes on
-                        # four cores a missed bond is a scheduling delay, not a
-                        # dead node, and the manager's answer to a missed bond
-                        # is to tear the costmaps down mid-race.
-                        {'bond_timeout': 0.0},
-                        # Absolute. The manager itself sits in /<ns>, so a name
-                        # without the leading slash resolves to
-                        # /r1/r1/local_costmap/... and it waits on a service
-                        # nobody offers -- which is what it did.
-                        {'node_names': [f'/{ns}/local_costmap/local_costmap',
-                                        f'/{ns}/global_costmap/global_costmap']}]))
 
         ld.add_action(Node(
             package='reactive_autonomous_nav', executable='astar_planner',

@@ -1,0 +1,269 @@
+# The five-robot race, one view.
+#
+# Fixed frame is `map`, which in this race is not a served map: race_up.sh pins
+# each robot's odom origin into it with a static transform at the pose the
+# robot was spawned at, so all five trees hang off one root and RViz can draw
+# the whole grid at once.  That is the whole reason the frame names carry the
+# namespace.
+#
+# One colour per robot, and every display for that robot wears it: its scan,
+# its plan, the line it actually drove, and its footprint.  At 560 px a GIF has
+# no room for a legend, so the colour has to be the legend.
+#
+# Each RobotModel carries a TF Prefix.  The display looks up a transform per
+# link using the link's own name out of the URDF, and robot_state_publisher
+# publishes those prefixed -- r1/base_link, not base_link -- so without it the
+# display finds nothing for any link and draws an empty footprint circle.
+#
+# No costmap display.  Five 6x6 m local costmaps on 1.3 m lane centres overlap
+# almost completely, and at any alpha that made the inflation visible the five
+# coloured paths -- the thing the clip is of -- disappeared under it.  The
+# costmaps are what the controllers are steering on either way; the footprints
+# and the paths are what shows whether it worked.
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded: ~
+    Width: 300
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Color: 96; 100; 108
+      Cell Size: 1
+      Plane Cell Count: 40
+    # --- r1: dwa ----------------------------------------------------
+    - Class: rviz_default_plugins/RobotModel
+      Name: R1Model
+      Enabled: true
+      Description Topic:
+        Value: /r1/robot_description
+        Durability Policy: Transient Local
+      TF Prefix: r1
+      Alpha: 1
+    - Class: rviz_default_plugins/LaserScan
+      Name: R1Scan
+      Enabled: true
+      Topic:
+        Value: /r1/scan
+        Reliability Policy: Best Effort
+      Size (m): 0.04
+      Color: 255; 106; 31
+      Color Transformer: FlatColor
+      Style: Points
+    - Class: rviz_default_plugins/Path
+      Name: R1Plan
+      Enabled: true
+      Topic: {Value: /r1/plan, Reliability Policy: Reliable}
+      Color: 255; 106; 31
+      Line Width: 0.03
+      Line Style: Billboards
+      Alpha: 0.5
+    - Class: rviz_default_plugins/Path
+      Name: R1Driven
+      Enabled: true
+      Topic: {Value: /r1/driven_path, Reliability Policy: Reliable}
+      Color: 255; 106; 31
+      Line Width: 0.07
+      Line Style: Billboards
+    - Class: rviz_default_plugins/Polygon
+      Name: R1Footprint
+      Enabled: true
+      Topic: {Value: /r1/local_costmap/published_footprint, Reliability Policy: Reliable}
+      Color: 255; 106; 31
+      Alpha: 1
+    # --- r2: pure_pursuit ----------------------------------------------------
+    - Class: rviz_default_plugins/RobotModel
+      Name: R2Model
+      Enabled: true
+      Description Topic:
+        Value: /r2/robot_description
+        Durability Policy: Transient Local
+      TF Prefix: r2
+      Alpha: 1
+    - Class: rviz_default_plugins/LaserScan
+      Name: R2Scan
+      Enabled: true
+      Topic:
+        Value: /r2/scan
+        Reliability Policy: Best Effort
+      Size (m): 0.04
+      Color: 80; 230; 160
+      Color Transformer: FlatColor
+      Style: Points
+    - Class: rviz_default_plugins/Path
+      Name: R2Plan
+      Enabled: true
+      Topic: {Value: /r2/plan, Reliability Policy: Reliable}
+      Color: 80; 230; 160
+      Line Width: 0.03
+      Line Style: Billboards
+      Alpha: 0.5
+    - Class: rviz_default_plugins/Path
+      Name: R2Driven
+      Enabled: true
+      Topic: {Value: /r2/driven_path, Reliability Policy: Reliable}
+      Color: 80; 230; 160
+      Line Width: 0.07
+      Line Style: Billboards
+    - Class: rviz_default_plugins/Polygon
+      Name: R2Footprint
+      Enabled: true
+      Topic: {Value: /r2/local_costmap/published_footprint, Reliability Policy: Reliable}
+      Color: 80; 230; 160
+      Alpha: 1
+    # --- r3: stanley ----------------------------------------------------
+    - Class: rviz_default_plugins/RobotModel
+      Name: R3Model
+      Enabled: true
+      Description Topic:
+        Value: /r3/robot_description
+        Durability Policy: Transient Local
+      TF Prefix: r3
+      Alpha: 1
+    - Class: rviz_default_plugins/LaserScan
+      Name: R3Scan
+      Enabled: true
+      Topic:
+        Value: /r3/scan
+        Reliability Policy: Best Effort
+      Size (m): 0.04
+      Color: 90; 170; 255
+      Color Transformer: FlatColor
+      Style: Points
+    - Class: rviz_default_plugins/Path
+      Name: R3Plan
+      Enabled: true
+      Topic: {Value: /r3/plan, Reliability Policy: Reliable}
+      Color: 90; 170; 255
+      Line Width: 0.03
+      Line Style: Billboards
+      Alpha: 0.5
+    - Class: rviz_default_plugins/Path
+      Name: R3Driven
+      Enabled: true
+      Topic: {Value: /r3/driven_path, Reliability Policy: Reliable}
+      Color: 90; 170; 255
+      Line Width: 0.07
+      Line Style: Billboards
+    - Class: rviz_default_plugins/Polygon
+      Name: R3Footprint
+      Enabled: true
+      Topic: {Value: /r3/local_costmap/published_footprint, Reliability Policy: Reliable}
+      Color: 90; 170; 255
+      Alpha: 1
+    # --- r4: teb ----------------------------------------------------
+    - Class: rviz_default_plugins/RobotModel
+      Name: R4Model
+      Enabled: true
+      Description Topic:
+        Value: /r4/robot_description
+        Durability Policy: Transient Local
+      TF Prefix: r4
+      Alpha: 1
+    - Class: rviz_default_plugins/LaserScan
+      Name: R4Scan
+      Enabled: true
+      Topic:
+        Value: /r4/scan
+        Reliability Policy: Best Effort
+      Size (m): 0.04
+      Color: 235; 110; 210
+      Color Transformer: FlatColor
+      Style: Points
+    - Class: rviz_default_plugins/Path
+      Name: R4Plan
+      Enabled: true
+      Topic: {Value: /r4/plan, Reliability Policy: Reliable}
+      Color: 235; 110; 210
+      Line Width: 0.03
+      Line Style: Billboards
+      Alpha: 0.5
+    - Class: rviz_default_plugins/Path
+      Name: R4Driven
+      Enabled: true
+      Topic: {Value: /r4/driven_path, Reliability Policy: Reliable}
+      Color: 235; 110; 210
+      Line Width: 0.07
+      Line Style: Billboards
+    - Class: rviz_default_plugins/Polygon
+      Name: R4Footprint
+      Enabled: true
+      Topic: {Value: /r4/local_costmap/published_footprint, Reliability Policy: Reliable}
+      Color: 235; 110; 210
+      Alpha: 1
+    # --- r5: mppi ----------------------------------------------------
+    - Class: rviz_default_plugins/RobotModel
+      Name: R5Model
+      Enabled: true
+      Description Topic:
+        Value: /r5/robot_description
+        Durability Policy: Transient Local
+      TF Prefix: r5
+      Alpha: 1
+    - Class: rviz_default_plugins/LaserScan
+      Name: R5Scan
+      Enabled: true
+      Topic:
+        Value: /r5/scan
+        Reliability Policy: Best Effort
+      Size (m): 0.04
+      Color: 255; 214; 92
+      Color Transformer: FlatColor
+      Style: Points
+    - Class: rviz_default_plugins/Path
+      Name: R5Plan
+      Enabled: true
+      Topic: {Value: /r5/plan, Reliability Policy: Reliable}
+      Color: 255; 214; 92
+      Line Width: 0.03
+      Line Style: Billboards
+      Alpha: 0.5
+    - Class: rviz_default_plugins/Path
+      Name: R5Driven
+      Enabled: true
+      Topic: {Value: /r5/driven_path, Reliability Policy: Reliable}
+      Color: 255; 214; 92
+      Line Width: 0.07
+      Line Style: Billboards
+    - Class: rviz_default_plugins/Polygon
+      Name: R5Footprint
+      Enabled: true
+      Topic: {Value: /r5/local_costmap/published_footprint, Reliability Policy: Reliable}
+      Color: 255; 214; 92
+      Alpha: 1
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+  Global Options:
+    Background Color: 62; 66; 74
+    Fixed Frame: map
+    Frame Rate: 6
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      # Behind the grid, looking up the straight.  The robots start on y = -1
+      # spanning x in [-5.6, -0.4] and finish on y = 5 -- see sim/grid_tf.py
+      # for why the grid sits there -- so the focal point is the middle of the
+      # run and the distance is what it takes to hold a 5.2 m wide, 6 m long
+      # box inside a 912x624 crop.
+      Distance: 8
+      Pitch: 1.1
+      Yaw: 4.7124
+      Focal Point: {X: -3.0, Y: 2.0, Z: 0}
+      Name: Current View
+    Saved: ~
+Window Geometry:
+  Hide Left Dock: true
+  Hide Right Dock: true
+  Displays:
+    collapsed: true
+  Height: 720
+  Width: 1280
+  QMainWindow State: ""

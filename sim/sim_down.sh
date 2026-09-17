@@ -24,7 +24,13 @@ stop $G/run/sim/*.pid
 PATS=("gz sim" "parameter_bridge" "turtlebot4_spawn" "create3_nodes"
       "irobot_create" "robot_state_publisher" "ros_gz_sim" "map_server"
       "cmd_relay.py" "localize.py" "static_transform_publisher"
-      "turtlebot4_node" "ros_gz_bridge" "Xvfb")
+      "turtlebot4_node" "ros_gz_bridge" "Xvfb"
+      # joint_state_publisher was missing from this list for ten runs.  Six of
+      # them survived every teardown -- one from the first single-robot bringup
+      # and one per robot from the five-robot attempt -- and were still in
+      # `ros2 node list` three hours later, two of them claiming the same node
+      # name in the same namespace.
+      "joint_state_publisher" "spawner")
 for sig in TERM KILL; do
   for pat in "${PATS[@]}"; do
     for p in $(pgrep -f -- "$pat" 2>/dev/null); do

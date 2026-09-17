@@ -17,9 +17,19 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
-from nav_msgs.msg import OccupancyGrid, Path
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from sensor_msgs.msg import LaserScan
 
-KINDS = {"OccupancyGrid": OccupancyGrid, "Path": Path}
+KINDS = {"OccupancyGrid": OccupancyGrid, "Path": Path,
+         "LaserScan": LaserScan, "Odometry": Odometry}
+
+# A costmap and a plan are latched and reliable; a bridged sensor stream is
+# neither.  Subscribing to the second with the first's profile matches nothing
+# and times out with the data flowing the whole time -- which is what a run of
+# the five-robot bringup reported before this split existed, five robots all
+# reading zero while gazebo was stepping them.  Best effort and volatile
+# matches a reliable publisher too, so it is the safe side to be wrong on.
+LIVE = {"LaserScan", "Odometry"}
 
 
 def main() -> int:
@@ -34,8 +44,12 @@ def main() -> int:
     n = Node("wait_topic")
     got: list[object] = []
     q = QoSProfile(depth=1)
-    q.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
-    q.reliability = QoSReliabilityPolicy.RELIABLE
+    if kind in LIVE:
+        q.durability = QoSDurabilityPolicy.VOLATILE
+        q.reliability = QoSReliabilityPolicy.BEST_EFFORT
+    else:
+        q.durability = QoSDurabilityPolicy.TRANSIENT_LOCAL
+        q.reliability = QoSReliabilityPolicy.RELIABLE
     def keep(m: object) -> None:
         if kind == "OccupancyGrid" and need:
             if sum(1 for v in m.data if v > 0) < need:
@@ -54,7 +68,8 @@ def main() -> int:
     elif ok:
         print(f"{topic}: received")
     else:
-        print(f"{topic}: nothing with at least {need} populated cells in {secs:.0f}s")
+        want = f" with at least {need} populated cells" if need else ""
+        print(f"{topic}: nothing{want} in {secs:.0f}s")
     rclpy.shutdown()
     return 0 if ok else 1
 

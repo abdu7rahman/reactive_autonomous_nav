@@ -36,10 +36,19 @@ zap() {
 
 stop $G/run/job/*.pid
 
-PATS=("dwa_controller" "pure_pursuit_controller" "stanley_controller"
-      "teb_controller" "mppi_controller" "astar_planner" "theta_star_planner"
-      "smac_planner" "rrt_planner" "rrt_smac_hybrid_planner"
-      "nav2_costmap_2d" "nav2_lifecycle_manager" "rviz2")
+# Patterns carry the installed path, not just the node name.  A bare
+# "dwa_controller" matches any process whose argv mentions the file -- an
+# editor, a grep, a colcon build, the shell running this script's caller -- and
+# this swept away a shell that was in the middle of patching those very files,
+# reported as exit code 144 with the work half done.  The ancestor guard below
+# only protects this script's own ancestry; it cannot protect a sibling.
+L=lib/reactive_autonomous_nav
+PATS=("$L/dwa_controller" "$L/pure_pursuit_controller" "$L/stanley_controller"
+      "$L/teb_controller" "$L/mppi_controller" "$L/astar_planner"
+      "$L/theta_star_planner" "$L/smac_planner" "$L/rrt_planner"
+      "$L/rrt_smac_hybrid_planner"
+      "nav2_costmap_2d/nav2_costmap_2d" "nav2_lifecycle_manager/lifecycle_manager"
+      "bin/rviz2")
 zap TERM "${PATS[@]}"
 sleep 6
 zap KILL "${PATS[@]}"

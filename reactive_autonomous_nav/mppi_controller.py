@@ -12,6 +12,7 @@ MPPI Local Controller — reactive_autonomous_nav (Nav2-inspired)
 import rclpy
 import rclpy.time
 import math
+import time
 import numpy as np
 from rclpy.node import Node
 from rclpy.duration import Duration
@@ -77,21 +78,28 @@ class MPPIControllerNode(Node):
         self.dt           = 0.05        # Time step (20 Hz internal model)
         self.num_samples  = 1000        # Number of trajectory samples
         self.temperature  = 0.3         # Softmax temperature (higher = more exploration)
-        # AR(1) coefficient of the sampled noise, per 0.05 s step.
+        # AR(1) coefficient of the sampled noise, per 0.05 s step.  Renamed
+        # from `gamma`, whose comment read "noise decay factor for time
+        # correlation" and described a value that produces no correlation:
+        # 0.015 gives a 0.012 s time constant against a 2.8 s horizon, so the
+        # noise is white and the integrated control over the horizon varies by
+        # a seventh of std.
         #
-        # This was 0.015, which is nav2's default for a parameter called gamma
-        # that is not this one: nav2's gamma is the control-cost coefficient in
-        # updateControlSequence -- "a trade-off between smoothness (high) and
-        # low energy (low)" -- and it was read here as a noise autocorrelation.
-        # At 0.015 the noise is white, so the integrated control over a 56-step
-        # horizon varies by std/sqrt(56), about a thirtieth of std: all 1000
-        # rollouts are near-copies of the warm-started baseline and the
-        # weighted mean cannot leave it. In the five-robot race that showed as
-        # a fixed point -- r5 held v=-0.02, w=-1.85 (the -1.9 ceiling) for the
-        # rest of the run, spinning in place 2.5 m from its goal, while the
-        # other four finished. 0.9 gives a 0.47 s correlation time, so a
-        # rollout is about six independent segments rather than one.
-        self.noise_corr   = 0.9
+        # 0.015 is nav2's default for a parameter called gamma that is not this
+        # one -- nav2's gamma is the control-cost coefficient in
+        # updateControlSequence, "a trade-off between smoothness (high) and low
+        # energy (low)" -- so the name came across and the meaning did not.
+        #
+        # 0.9 was tried, for a 0.475 s time constant and about six independent
+        # segments per rollout, on the theory that near-identical rollouts are
+        # what leaves the weighted mean stuck on its own warm start. It
+        # measured worse and fixed nothing: rooms-200 went 654 -> 671 steps and
+        # 20.81 -> 21.06 m (against a run-to-run spread of about 4 steps over
+        # four runs), maze-wide-153 427 -> 422 steps and 12.14 -> 12.42 m, and
+        # the five-robot race still stalled -- 4.07 m of 5.80 before, 3.57 m
+        # after. Reverted. Whatever holds MPPI on that straight, it is not
+        # sample diversity.
+        self.noise_corr   = 0.015
 
         # ── Robot kinematic limits ───────────────────────────────────
         self.max_vel       = 0.5
@@ -273,6 +281,7 @@ class MPPIControllerNode(Node):
             return
 
         # Run MPPI optimization
+        t_opt = time.perf_counter()
         optimal_cmd = self._mppi_optimize(pose)
         if optimal_cmd is None:
             self._stop()
@@ -289,7 +298,9 @@ class MPPIControllerNode(Node):
         # controllers in one graph can be read side by side.
         self.get_logger().info(
             f'v={cmd.linear.x:.2f} ω={cmd.angular.z:.2f} '
-            f'wps={len(self.path_xy)} dist={dist_to_goal:.2f}m',
+            f'at=({pose[0]:.2f},{pose[1]:.2f}) yaw={pose[2]:.2f} '
+            f'wps={len(self.path_xy)} dist={dist_to_goal:.2f}m '
+            f'opt={1e3 * (time.perf_counter() - t_opt):.0f}ms',
             throttle_duration_sec=1.0)
 
     def _prune_path(self, pose):
@@ -488,12 +499,9 @@ class MPPIControllerNode(Node):
         closest_idx = np.argmin(dists)
 
         # Generate reference points at each timestep
-        current_dist = 0.0
-        path_idx = closest_idx
-        
         for t in range(T):
             # Distance we expect to travel by this timestep
-            target_dist = current_dist + self.max_vel * self.dt * t * 0.7  # 70% of max speed
+            target_dist = self.max_vel * self.dt * t * 0.7  # 70% of max speed
 
             # Find point on path at that distance
             accumulated_dist = 0.0

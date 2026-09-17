@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- UDPv4 only: no shared-memory transport.
+
+     Fast DDS in Jazzy defaults to shared memory plus UDPv4, and the race puts
+     about fifty participants in one graph.  Past roughly that many, every new
+     participant on this machine logs
+
+       [RTPS_TRANSPORT_SHM Error] Failed init_port fastrtps_port7000:
+       open_and_lock_file failed -> Function open_port_internal
+
+     and discovery stops completing: the five costmap lifecycle managers sat on
+     "Waiting for service /r1/local_costmap/local_costmap/get_state" for eight
+     minutes while `ros2 service list` listed that exact service, and a direct
+     `ros2 service call` to it timed out.  /dev/shm was 93 MB used of 16 GB and
+     the file limit was 20000, so it is the transport's own port table rather
+     than anything the machine ran out of.  The ten single-robot runs never saw
+     the error; they had a third of the participants.
+
+     Loopback UDP on the same host costs throughput that nothing here is near
+     using -- the largest message in the graph is a 400x400 costmap at 5 Hz. -->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>udp_only</transport_id>
+        <type>UDPv4</type>
+      </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="udp_participant" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>udp_only</transport_id>
+        </userTransports>
+        <useBuiltinTransports>false</useBuiltinTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>
