@@ -29,6 +29,31 @@ LETHAL_COST = 253
 AVOID_COST  = 200
 FREE_COST   = 10
 
+def _costs_from_grid(msg):
+    """OccupancyGrid values back onto the nav2 cost scale this file thresholds on.
+
+    nav2 publishes /<name>/costmap as a nav_msgs/OccupancyGrid -- 0..100, with
+    -1 for unknown -- and keeps the raw 0..255 costmap on /<name>/costmap_raw.
+    Every threshold in this package is written on the raw scale, and
+    bench/maps.py builds its grids that way too (0 free, 100 inflated, 254
+    lethal), so reading the OccupancyGrid straight into the same comparisons
+    left them unreachable: across the whole 1006x1674 warehouse costmap the
+    highest value anywhere was 100, and no cell ever counted as lethal.  What
+    that looked like from outside was Theta* handing back a two-waypoint plan
+    straight through a wall, because its line-of-sight check could not see one.
+
+    Inverts nav2's own forward map (Costmap2DPublisher::prepareGrid):
+    255 -> -1, 254 -> 100, 253 -> 99, otherwise cost * 99 / 252.
+    """
+    g = np.asarray(msg.data, dtype=np.int32).reshape(
+        (msg.info.height, msg.info.width))
+    out = g * 252 // 99
+    out[g == 99] = 253
+    out[g == 100] = 254
+    out[g < 0] = -1
+    return out.astype(np.int16)
+
+
 class RRTNode:
     def __init__(self, x, y):
         self.x = x
@@ -98,15 +123,13 @@ class RRTPlannerNode(Node):
     #  Callbacks
     # ================================================================
     def _global_cb(self, msg: OccupancyGrid):
-        self.global_data   = np.array(msg.data, dtype=np.int16).reshape(
-            (msg.info.height, msg.info.width))
+        self.global_data   = _costs_from_grid(msg)
         self.global_info   = msg.info
         self.global_origin = (msg.info.origin.position.x,
                               msg.info.origin.position.y)
 
     def _local_cb(self, msg: OccupancyGrid):
-        self.local_data   = np.array(msg.data, dtype=np.int16).reshape(
-            (msg.info.height, msg.info.width))
+        self.local_data   = _costs_from_grid(msg)
         self.local_info   = msg.info
         self.local_origin = (msg.info.origin.position.x,
                              msg.info.origin.position.y)
