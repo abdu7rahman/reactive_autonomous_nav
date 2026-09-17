@@ -1,12 +1,14 @@
 #!/bin/bash
 # Record the five-robot race against the running simulator.
 #
-#   RACE_COURSE=straight|chicane race.sh [wall_seconds]
+#   RACE_COURSE=straight|chicane RACE_FIELD=ours|nav2 race.sh [wall_seconds]
 #
 # The course has to be the one race_up.sh spawned -- it decides where the lanes
-# are -- so both read RACE_COURSE from the environment and the output is named
-# after it: gif/race.gif is the straight and gif/race-chicane.gif the chicane.
-# Two artefacts, not one overwritten twice.
+# are -- so both read RACE_COURSE from the environment.  RACE_FIELD picks who
+# is racing: this package's five controllers, or its DWA against nav2's own.
+# The output is named after both, so gif/race.gif is the straight,
+# gif/race-chicane.gif the chicane and gif/race-chicane-nav2.gif the nav2
+# field on it.  Three artefacts, not one overwritten three times.
 #
 # race_up.sh puts the grid on the start line; this brings up five costmap
 # pairs and five controllers -- plus five planners on the straight, where each
@@ -24,11 +26,13 @@ G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . $G/lib.sh
 export DISPLAY=:99
 export RACE_COURSE=${RACE_COURSE:-chicane}
+export RACE_FIELD=${RACE_FIELD:-ours}
 
 
 WALL=${1:-600}
 eval "$(python3 $G/grid_tf.py --lanes)"
 TAG=race; [ "$COURSE" != "straight" ] && TAG="race-$COURSE"
+[ "$RACE_FIELD" != "ours" ] && TAG="$TAG-$RACE_FIELD"
 RUN=$G/run; JOB=$RUN/job; mkdir -p "$JOB" "$RUN/log" "$G/gif"
 trap 'stop $JOB/*.pid' EXIT
 
@@ -111,12 +115,25 @@ for attempt in 1 2 3; do
   [ "$up" = "1" ] && break
   grep FAILED "$JOB/costmaps.log" 2>/dev/null | sed 's/^/      /'
   stop "$JOB/race.pid"
+  # Sweep before relaunching, not just stop.  `ros2 launch` does not always
+  # take its children with it, and a surviving controller_server answers the
+  # next attempt's lifecycle calls from whatever state it was already in --
+  # which is how an attempt that had brought two nav2 lanes all the way to
+  # ACTIVE reported both as failures and then relaunched on top of them.
+  bash $G/clean.sh | sed 's/^/      /'
   sleep 10
 done
 if [ "$up" != "1" ]; then
   echo "    the costmaps never all activated -- aborting"
   exit 1
 fi
+
+# One trail node for all five lanes, before RViz has anything to draw.  The
+# controllers' own /driven_path is not what the clip shows any more: the nav2
+# plugins publish nothing of the kind, and five controllers each drawing their
+# own idea of where they had been is five measurements on one picture.
+start "$JOB/trail.pid" python3 $G/trail.py --ros-args -p use_sim_time:=true
+sleep 3
 
 # RViz last.  It is the heaviest thing on this machine and the costmaps'
 # activation wait is what it used to walk on.
@@ -203,7 +220,12 @@ echo "    sim ${C0}s to ${C1}s over $(python3 -c "print(f'{${T1:-0}-${T0:-0}:.0f
 
 # Trim to the last finisher rather than the first: the point of the clip is who
 # arrives when, and cutting at the winner throws four of the five results away.
-LAST=$(grep -oE "crossed at [0-9.]+ s" "$RUN/log/$TAG.timer.log" 2>/dev/null \
+# The later of the last crossing and the moment the race was called.  Trimming
+# to the last crossing alone cut the nav2 field's clip at 14.5 s with three
+# robots still driving up the course, two of which stopped within 0.06 m of the
+# line: the interesting part of that race was entirely after the last finisher.
+LAST=$(grep -oE "crossed at [0-9.]+ s|race over: .* at [0-9.]+s" \
+       "$RUN/log/$TAG.timer.log" 2>/dev/null \
        | grep -oE "[0-9.]+" | sort -g | tail -1)
 TRIM=""
 if [ -n "$LAST" ]; then

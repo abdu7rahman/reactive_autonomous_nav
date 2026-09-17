@@ -33,12 +33,118 @@ __author__ = "".join(
 import math
 import os
 
-# Which controller is in which lane, and the colour that stands for it in every
-# view and every label.  One mapping, so a legend cannot disagree with a trail.
-CONTROLLER = {'r1': 'dwa', 'r2': 'pure_pursuit', 'r3': 'stanley',
-              'r4': 'teb', 'r5': 'mppi'}
+# Who is in which lane.  RACE_FIELD picks the field; a lane is either one of
+# this package's own controller nodes ('pkg') or a nav2 controller plugin
+# hosted in its own controller_server ('nav2').
+#
+#   ours   the five controllers in this package, one per lane.  What differs
+#          is the method.
+#   versus this package's DWA in both languages against nav2's own: the C++
+#          controller in cpp/src/dwa_controller.cpp, the Python one in
+#          reactive_autonomous_nav/dwa_controller.py, and three nav2 plugins.
+#          Five implementations of local control, one robot design, one
+#          costmap configuration, one path.
+#   nav2   this package's DWA -- the quickest of the five on both courses --
+#          against nav2's own local controllers, same costmap settings, same
+#          reference path, same robot.  bench/README.md says of
+#          nav2_dwb_controller that it "needs a live ROS 2 graph and costmap
+#          plugins to run at all, so any number taken outside that would be
+#          measuring the harness", and uses nav2's published figures instead.
+#          This is that live graph.
+FIELDS = {
+    'ours': {
+        'r1': ('pkg', 'dwa'),
+        'r2': ('pkg', 'pure_pursuit'),
+        'r3': ('pkg', 'stanley'),
+        'r4': ('pkg', 'teb'),
+        'r5': ('pkg', 'mppi'),
+    },
+    'versus': {
+        'r1': ('cpp', 'dwa'),
+        'r2': ('pkg', 'dwa'),
+        'r3': ('nav2', 'dwb_core::DWBLocalPlanner'),
+        'r4': ('nav2', 'nav2_mppi_controller::MPPIController'),
+        'r5': ('nav2', 'nav2_regulated_pure_pursuit_controller::'
+                       'RegulatedPurePursuitController'),
+    },
+    'nav2': {
+        'r1': ('pkg', 'dwa'),
+        'r2': ('nav2', 'dwb_core::DWBLocalPlanner'),
+        'r3': ('nav2', 'nav2_mppi_controller::MPPIController'),
+        'r4': ('nav2', 'nav2_regulated_pure_pursuit_controller::'
+                       'RegulatedPurePursuitController'),
+        'r5': ('nav2', 'nav2_graceful_controller::GracefulController'),
+    },
+}
+
+FIELD = os.environ.get('RACE_FIELD', 'ours')
+if FIELD not in FIELDS:
+    raise SystemExit(f'RACE_FIELD={FIELD!r} is not one of {sorted(FIELDS)}')
+ENTRANTS = FIELDS[FIELD]
+
+# What each lane is called in the scene, the table and the log.  Short, because
+# it is drawn over a robot in a 560 px clip: the plugin's own class name is the
+# thing that identifies it, so the label is its last component with the
+# repeated package prefix taken off.
+_SHORT = {'DWBLocalPlanner': 'nav2 dwb',
+          'MPPIController': 'nav2 mppi',
+          'RegulatedPurePursuitController': 'nav2 pursuit',
+          'GracefulController': 'nav2 graceful'}
+
+
+_MIXED = any(k == 'cpp' for k, _s in ENTRANTS.values())
+
+
+def _label(kind, spec):
+    """What the lane is called in the scene, the table and the log.
+
+    Short, because it is drawn over a robot in a 560 px clip: a nav2 plugin's
+    class name is what identifies it, so the label is its last component with
+    the repeated package prefix taken off.  In a field that races both of this
+    package's DWAs the Python one says so -- "dwa" beside "dwa c++" names the
+    language of one and not the other, which is the one thing a reader of that
+    clip needs to tell them apart.
+    """
+    if kind == 'cpp':
+        return f'{spec} c++'
+    if kind == 'pkg':
+        return f'{spec} python' if _MIXED else spec
+    return _SHORT[spec.rsplit('::', 1)[1]]
+
+
+CONTROLLER = {ns: _label(*e) for ns, e in ENTRANTS.items()}
+
+# The colour that stands for a lane in every view and every label.  One
+# mapping, so a legend cannot disagree with a trail.
 COLOUR = {'r1': (255, 106, 31), 'r2': (80, 230, 160), 'r3': (90, 170, 255),
           'r4': (235, 110, 210), 'r5': (255, 214, 92)}
+
+
+def check_field():
+    """A nav2 lane needs a course that hands out a path.
+
+    nav2's controller_server is a controller and nothing else: the only way to
+    give it a path is a FollowPath action goal, and on the straight course each
+    lane is expected to plan its own way to a goal with its own A*.  Racing the
+    two arrangements against each other would be racing a planner against no
+    planner, so it is refused here rather than measured.
+    """
+    if nav2_lanes() and not GATES:
+        raise SystemExit(
+            f'RACE_FIELD={FIELD} races nav2 controller plugins, which take a '
+            f'path and cannot plan one, but RACE_COURSE={COURSE} expects each '
+            f'lane to plan its own. Use a course with gates.')
+
+
+def nav2_lanes():
+    """The lanes whose controller is a nav2 plugin, in lane order."""
+    return [ns for ns, (kind, _spec) in ENTRANTS.items() if kind == 'nav2']
+
+
+def own_lanes():
+    """The lanes running one of this package's own controller nodes."""
+    return [ns for ns, (kind, _spec) in ENTRANTS.items()
+            if kind in ('pkg', 'cpp')]
 
 # The two courses.
 #
@@ -149,3 +255,6 @@ def gate_corridor(gy, off):
     if off < 0:
         return off + GATE_W / 2.0, off + SPACING - GATE_W / 2.0
     return off - SPACING + GATE_W / 2.0, off - GATE_W / 2.0
+
+
+check_field()

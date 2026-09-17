@@ -1,22 +1,22 @@
 [
  {
   "map": "128x128",
-  "ms": 7.5,
-  "min_ms": 7.41,
+  "ms": 7.52,
+  "min_ms": 7.36,
   "expanded": 500,
   "path_cells": 127
  },
  {
   "map": "256x256",
-  "ms": 110.26,
-  "min_ms": 107.53,
+  "ms": 121.4,
+  "min_ms": 120.04,
   "expanded": 8186,
   "path_cells": 291
  },
  {
   "map": "384x384",
-  "ms": 884.21,
-  "min_ms": 880.19,
+  "ms": 895.28,
+  "min_ms": 883.78,
   "expanded": 61631,
   "path_cells": 466
  }

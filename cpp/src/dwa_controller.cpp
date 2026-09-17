@@ -57,11 +57,30 @@ public:
     DWAControllerNode() : Node("dwa_controller_node")
     {
         // DWA params
+        // Frame names, so more than one of these can run in one graph.
+        // They were literals -- every node looked up "base_link" and
+        // stamped every path "map" -- which is fine for one robot and
+        // impossible for five: all of them would have been talking about
+        // the same robot.  The Python controllers were parameterised for
+        // the five-robot race and this one was not, so it could not enter
+        // it.  The defaults keep the single-robot case exactly as it was.
+        map_frame_     = declare_parameter("map_frame",  "map");
+        base_frame_    = declare_parameter("base_frame", "base_link");
         max_vel_       = declare_parameter("max_vel",       0.50);
         min_vel_       = declare_parameter("min_vel",       0.00);
         max_yawrate_   = declare_parameter("max_yawrate",   2.00);
-        max_accel_     = declare_parameter("max_accel",     0.40);
-        max_dyawrate_  = declare_parameter("max_dyawrate",  1.00);
+        // The accelerations are the robot's own, out of
+        // irobot_create_control/config/control.yaml -- the same numbers
+        // sim/race_robot.py gives Gazebo's DiffDrive.  They were 0.40 and
+        // 1.00 here, which is 2.2 and 7.7 times more conservative than the
+        // plant, and a dynamic window is by definition the velocities
+        // reachable in the next interval given the robot's accelerations
+        // (Fox, Burgard and Thrun): at 1.0 rad/s^2 this was not that, it
+        // was a rate limiter.  The Python controller carried the same two
+        // numbers and the same fault; see its comment for what the narrow
+        // window cost on the recorded runs.
+        max_accel_     = declare_parameter("max_accel",     0.90);
+        max_dyawrate_  = declare_parameter("max_dyawrate",  7.725);
         vel_res_       = declare_parameter("vel_res",       0.02);
         yawrate_res_   = declare_parameter("yawrate_res",   0.04);
         predict_time_  = declare_parameter("predict_time",  2.50);
@@ -99,7 +118,7 @@ public:
             std::chrono::milliseconds(100),
             std::bind(&DWAControllerNode::control_loop, this));
 
-        driven_path_.header.frame_id = "map";
+        driven_path_.header.frame_id = map_frame_;
         RCLCPP_INFO(get_logger(), "DWA Controller (C++) ready");
     }
 
@@ -108,6 +127,7 @@ private:
     double max_vel_, min_vel_, max_yawrate_, max_accel_, max_dyawrate_;
     double vel_res_, yawrate_res_, predict_time_, dt_;
     double heading_gain_, speed_gain_, obstacle_gain_, lookahead_, goal_tol_;
+    std::string map_frame_, base_frame_;
 
     // ── state ─────────────────────────────────────────────────────────────────
     RobotState                              robot_{};
@@ -119,7 +139,7 @@ private:
     bool                                    recovery_mode_{false};
     int                                     recovery_ticks_{0};
     float                                   recovery_dir_{1.0f};
-    std::deque<std::pair<double,double>>    pos_history_;
+    std::deque<size_t>                      wp_history_;
     nav_msgs::msg::Path                     driven_path_;
 
     // ── ROS ───────────────────────────────────────────────────────────────────
@@ -150,6 +170,8 @@ private:
         goal_reached_ = false;
         recovery_mode_ = false;
         wp_idx_ = 0;
+        // a new plan is new progress; the old indices would read as a stall
+        wp_history_.clear();
 
         // find closest waypoint ahead of robot
         RobotState s = robot_;
@@ -171,7 +193,8 @@ private:
     {
         try {
             auto tf = tf_buffer_->lookupTransform(
-                "map", "base_link", tf2::TimePointZero, tf2::durationFromSec(0.3));
+                map_frame_, base_frame_, tf2::TimePointZero,
+                tf2::durationFromSec(0.3));
             s.x = tf.transform.translation.x;
             s.y = tf.transform.translation.y;
             tf2::Quaternion q(
@@ -218,14 +241,44 @@ private:
     }
 
     // ── stuck detection ───────────────────────────────────────────────────────
-    bool is_stuck(const RobotState& s)
+    // Every multiple of `res` inside [lo, hi], with both bounds present.
+    // A window narrower than one step still yields its own endpoints rather
+    // than nothing, which is what an empty candidate set costs: a commanded
+    // zero, and an instantaneous stop from whatever the robot was doing.
+    static std::vector<double> samples(double lo, double hi, double res)
     {
-        pos_history_.push_back({s.x, s.y});
-        if (pos_history_.size() > 50) pos_history_.pop_front();
-        if (pos_history_.size() < 20) return false;
-        double dx = pos_history_.back().first  - pos_history_.front().first;
-        double dy = pos_history_.back().second - pos_history_.front().second;
-        return std::hypot(dx, dy) < 0.03;
+        if (hi <= lo) return { lo };
+        std::vector<double> out;
+        const long k0 = (long)std::ceil(lo / res - 1e-9);
+        const long k1 = (long)std::floor(hi / res + 1e-9);
+        if (k0 > k1 || k0 * res > lo + 1e-9) out.push_back(lo);
+        for (long k = k0; k <= k1; k++) out.push_back(k * res);
+        if (out.back() < hi - 1e-9) out.push_back(hi);
+        return out;
+    }
+
+    // Stuck is "made no progress", not "did not move".  A robot orbiting its
+    // own lookahead point is moving and getting nowhere: 0.18 m/s at
+    // 0.9 rad/s sweeps 4.5 rad over a fifty-tick window and covers 0.32 m of
+    // chord against a 3 cm displacement threshold, so a detector that only
+    // measures displacement calls it fine -- and two recorded runs of the
+    // Python controller did exactly that for a hundred seconds each before it
+    // was fixed the same way.  Progress is the waypoint index, which cannot
+    // advance while the robot circles.
+    bool is_stuck()
+    {
+        wp_history_.push_back(wp_idx_);
+        if (wp_history_.size() > 50) wp_history_.pop_front();
+        // The full window, as in the Python controller: a partial one is what
+        // made the first version of this latch.  Recovery spins in place and
+        // returns before the waypoint index is advanced, so every tick of a
+        // spin appends the same index; at a twenty-sample threshold the window
+        // was still all-spin when recovery ended, the check fired again
+        // immediately, and the C++ lane of the race spent it turning on the
+        // spot at 0.52 m of 5.80.  Fifty samples plus the clear below is what
+        // lets a recovery earn its way out.
+        if (wp_history_.size() < 50) return false;
+        return wp_history_.back() <= wp_history_.front();
     }
 
     // ── main control loop ─────────────────────────────────────────────────────
@@ -239,7 +292,7 @@ private:
 
         // track driven path
         geometry_msgs::msg::PoseStamped driven_ps;
-        driven_ps.header.frame_id = "map";
+        driven_ps.header.frame_id = map_frame_;
         driven_ps.header.stamp    = now();
         driven_ps.pose.position.x = s.x;
         driven_ps.pose.position.y = s.y;
@@ -262,8 +315,13 @@ private:
             return;
         }
 
+        // Advance the waypoint index before asking whether it advanced: the
+        // lookahead search is what moves it, and reading it first records
+        // last tick's progress against last tick's.
+        get_lookahead_wp(s);
+
         // recovery mode
-        if (is_stuck(s)) {
+        if (is_stuck()) {
             if (!recovery_mode_) {
                 recovery_mode_  = true;
                 recovery_ticks_ = 0;
@@ -277,7 +335,12 @@ private:
             rec.angular.z = recovery_dir_ * max_yawrate_;
             pub_cmd_->publish(rec);
             recovery_ticks_++;
-            if (recovery_ticks_ > 15) recovery_mode_ = false;
+            if (recovery_ticks_ > 15) {
+                recovery_mode_ = false;
+                // A window full of the index the spin froze is not evidence
+                // about the driving that follows it.
+                wp_history_.clear();
+            }
             return;
         }
 
@@ -298,8 +361,17 @@ private:
         visualization_msgs::msg::MarkerArray traj_ma;
         int marker_id = 0;
 
-        for (double v = v_min; v <= v_max + 1e-9; v += vel_res_) {
-            for (double w = w_min; w <= w_max + 1e-9; w += yawrate_res_) {
+        // Sampled on a lattice with the bounds included, not by accumulating
+        // the resolution from the lower bound.  `v += vel_res_` admits one
+        // step past v_max when the window is not a whole number of steps
+        // wide, and it never evaluates v_max itself unless it happens to land
+        // there -- so the quickest reachable speed was usually not among the
+        // candidates.  samples() is the same construction the Python
+        // controller uses, and bench/test_dwa_window.py is the gate on it.
+        const std::vector<double> vs = samples(v_min, v_max, vel_res_);
+        const std::vector<double> ws = samples(w_min, w_max, yawrate_res_);
+        for (double v : vs) {
+            for (double w : ws) {
                 // simulate trajectory
                 RobotState cur = s;
                 bool collision  = false;
@@ -341,7 +413,7 @@ private:
                 auto rgb = hsv_to_rgb(0.67f * (1.0f - ratio));  // blue=low, red=high
 
                 visualization_msgs::msg::Marker m;
-                m.header.frame_id = "map";
+                m.header.frame_id = map_frame_;
                 m.header.stamp    = now();
                 m.ns              = "dwa_traj";
                 m.id              = marker_id++;

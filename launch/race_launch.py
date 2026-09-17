@@ -59,14 +59,22 @@ from ament_index_python.packages import get_package_share_directory
 import os
 import tempfile
 
-from reactive_autonomous_nav.race_course import CONTROLLER, COURSE, GATES
+from reactive_autonomous_nav.race_course import (
+    CONTROLLER, COURSE, ENTRANTS, FIELD, GATES)
 
-# Which controller is in which lane, and where the lanes are, both come from
+# Who is in which lane, and where the lanes are, both come from
 # race_course.py -- the same module sim/grid_tf.py spawns the grid from and
 # pins the odom origins from, and which records how the grid's position was
 # measured against the warehouse's own occupancy map.  It was declared twice
 # and the copies were already drifting.
-GRID = [(ns, f'{ctrl}_controller') for ns, ctrl in CONTROLLER.items()]
+#
+# A lane is one of two things.  A 'pkg' lane runs one of this package's
+# controller nodes against a nav2_costmap_2d local costmap of its own.  A
+# 'nav2' lane runs a nav2 controller_server hosting the named plugin, which
+# brings its own local costmap with it -- configured, in config/
+# race_nav2_params.yaml, to the same 6 x 6 m window and the same 0.30 m
+# inflation the package's controllers read, so what differs between lanes is
+# the controller and not the costmap.
 
 VIZ = ['/astar_markers', '/astar_explored', '/astar_status', '/replan_request',
        '/driven_path', '/controller_status', '/dwa_trajectories',
@@ -79,6 +87,86 @@ def remaps(ns):
     names = ['/plan', '/goal_pose', '/odom', '/cmd_vel_unstamped',
              '/global_costmap/costmap', '/local_costmap/costmap'] + VIZ
     return [(n, f'/{ns}{n}') for n in names]
+
+
+# What each nav2 plugin has to be told, and nothing more.
+#
+# The robot's limits first.  They are the plant's own, out of
+# irobot_create_control/config/control.yaml by way of sim/race_robot.py, which
+# is what Gazebo's DiffDrive is given: 0.46 m/s, 1.9 rad/s, 0.9 m/s^2 and
+# 7.725 rad/s^2.  Racing them on their defaults instead was tried first and is
+# not a comparison of controllers: DWB's default max_vel_x is 0.0, so it sat
+# on the start line for the whole race, and every plugin has a different idea
+# of what a default robot is.  This package's own DWA asks for 0.50 and 2.0
+# and the plant clamps it to the same 0.46 and 1.9, so all five lanes are held
+# to one envelope.
+#
+# Everything else is the plugin's own default.  DWB's block carries the sample
+# counts and granularity nav2 ships in its own DWB example, because they
+# describe the search rather than the robot, and its critic list, because DWB
+# is the one plugin with no default list -- it refuses to configure with "No
+# critics defined for FollowPath".  The list cannot live in the template for
+# everyone: nav2's MPPI reads the same `critics` key with an entirely
+# different set of class names and refuses to load DWB's.
+MAX_V, MAX_W, ACC_V, ACC_W = 0.46, 1.9, 0.9, 7.725
+
+PLUGIN_EXTRA = {
+    'dwb_core': f"""        min_vel_x: 0.0
+        min_vel_y: 0.0
+        max_vel_x: {MAX_V}
+        max_vel_y: 0.0
+        max_vel_theta: {MAX_W}
+        min_speed_xy: 0.0
+        max_speed_xy: {MAX_V}
+        min_speed_theta: 0.0
+        acc_lim_x: {ACC_V}
+        acc_lim_y: 0.0
+        acc_lim_theta: {ACC_W}
+        decel_lim_x: -{ACC_V}
+        decel_lim_y: 0.0
+        decel_lim_theta: -{ACC_W}
+        vx_samples: 20
+        vy_samples: 5
+        vtheta_samples: 20
+        sim_time: 1.7
+        linear_granularity: 0.05
+        angular_granularity: 0.025
+        transform_tolerance: 0.2
+        short_circuit_trajectory_evaluation: True
+        stateful: True
+        critics: ["RotateToGoal", "Oscillation", "BaseObstacle",
+                  "GoalAlign", "PathAlign", "PathDist", "GoalDist"]""",
+
+    'nav2_mppi_controller': f"""        motion_model: "DiffDrive"
+        vx_max: {MAX_V}
+        vx_min: -0.35
+        vy_max: 0.0
+        wz_max: {MAX_W}
+        ax_max: {ACC_V}
+        ax_min: -{ACC_V}
+        az_max: {ACC_W}""",
+
+    'nav2_regulated_pure_pursuit_controller': f"""        desired_linear_vel: {MAX_V}
+        max_angular_accel: {ACC_W}
+        rotate_to_heading_angular_vel: {MAX_W}""",
+
+    'nav2_graceful_controller': f"""        v_linear_max: {MAX_V}
+        v_linear_min: 0.0
+        v_angular_max: {MAX_W}""",
+}
+
+
+def nav2_params(pkg, ns, plugin):
+    """One controller_server config per nav2 lane, from the template."""
+    src = os.path.join(pkg, 'config', 'race_nav2_params.yaml')
+    extra = PLUGIN_EXTRA[plugin.split('::', 1)[0]]
+    with open(src) as f:
+        text = (f.read().replace('__NS__', ns).replace('__PLUGIN__', plugin)
+                .replace('__PLUGIN_EXTRA__', extra))
+    out = os.path.join(tempfile.gettempdir(), f'race_nav2_{ns}.yaml')
+    with open(out, 'w') as f:
+        f.write(text)
+    return out
 
 
 def costmap_params(pkg, ns):
@@ -100,7 +188,27 @@ def generate_launch_description():
     pkg = get_package_share_directory('reactive_autonomous_nav')
     ld = LaunchDescription()
 
-    for ns, controller in GRID:
+    for ns, (kind, spec) in ENTRANTS.items():
+        if kind == 'nav2':
+            # controller_server hosts its own costmap, so there is no separate
+            # nav2_costmap_2d node in this lane. cmd_vel is a plain Twist in
+            # this build, which is what the Gazebo bridge takes, so it is a
+            # remap rather than a relay.
+            ld.add_action(Node(
+                package='nav2_controller', executable='controller_server',
+                name='controller_server', namespace=ns, output='screen',
+                parameters=[nav2_params(pkg, ns, spec), {'use_sim_time': True}],
+                remappings=[('cmd_vel', f'/{ns}/cmd_vel_unstamped')]))
+            continue
+
+        # The C++ controller is the same method in another language and
+        # another package; it reads and writes the same topic names, so the
+        # same remaps carry it.  It declares map_frame and base_frame and
+        # nothing else of the five frame parameters, because that is all it
+        # looks up.
+        package = 'reactive_nav_cpp' if kind == 'cpp' else \
+                  'reactive_autonomous_nav'
+        controller = 'dwa_controller' if kind == 'cpp' else f'{spec}_controller'
         frames = {'map_frame': 'map',
                   'odom_frame': f'{ns}/odom',
                   'base_frame': f'{ns}/base_link'}
@@ -135,10 +243,9 @@ def generate_launch_description():
                 package='reactive_autonomous_nav', executable='astar_planner',
                 name='astar_planner_node', **common))
         ld.add_action(Node(
-            package='reactive_autonomous_nav', executable=controller,
+            package=package, executable=controller,
             name=f'{controller}_node', **common))
 
-    print(f'race_launch: course {COURSE}, {len(GRID)} robots, '
-          f'{"controllers and local costmaps only" if GATES else
-             "planner, controller and both costmaps each"}')
+    kinds = ', '.join(f'{ns}:{CONTROLLER[ns]}' for ns in ENTRANTS)
+    print(f'race_launch: course {COURSE}, field {FIELD} -- {kinds}')
     return ld

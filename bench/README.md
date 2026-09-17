@@ -139,39 +139,88 @@ the goal connects, so open maps still finish in ~20 ms.
 
 ## Local controller vs other DWA implementations
 
-Four implementations, same dynamic window, same trajectory count, same 25-step
-horizon. Baselines are fetched by `bench/fetch_baselines.sh`, not vendored.
+Six implementations, same dynamic window, same trajectory count, same 25-step
+horizon. Baselines are fetched, not vendored: `bench/fetch_baselines.sh` for
+the C and C++ ones, and `bench/dwa_compare.py` pulls the Python ones at run
+time. Only their plotting is stripped; the planner functions are theirs.
 
-| Trajectories | This repo (C++) | [CppRobotics](https://github.com/onlytailei/CppRobotics) (C++) | [goktug97](https://github.com/goktug97/DynamicWindowApproach) (C) | [PythonRobotics](https://github.com/AtsushiSakai/PythonRobotics) (Py) |
+Every number below is the median of three full runs of the comparison, and the
+run-to-run spread is given with it, because it is wide enough to matter: at
+these durations the difference between two runs of the same binary is up to 14
+percent on the C++ side and up to 18 on the Python side. Nothing smaller than
+that is being claimed.
+
+**C and C++** — `bench/dwa_compare_cpp.cpp`, built by `bench/run.sh`
+
+| Trajectories | This repo | [CppRobotics](https://github.com/onlytailei/CppRobotics) | [goktug97](https://github.com/goktug97/DynamicWindowApproach) (C) | [amslabtech](https://github.com/amslabtech/dwa_planner) |
 | ---: | ---: | ---: | ---: | ---: |
-| 36 | **0.011 ms** | 0.013 ms | 0.091 ms | 2.30 ms |
-| 100 | **0.030 ms** | 0.032 ms | 0.303 ms | 7.16 ms |
-| 400 | **0.120 ms** | 0.142 ms | 1.353 ms | 33.84 ms |
-| 900 | **0.275 ms** | 0.315 ms | 3.159 ms | 78.25 ms |
-| 2,500 | **0.760 ms** | 0.884 ms | 8.950 ms | 219.36 ms |
+| 36 | **0.012 ms** | 0.015 ms | 0.094 ms | 0.314 ms |
+| 100 | **0.032 ms** | 0.038 ms | 0.317 ms | 0.910 ms |
+| 400 | **0.136 ms** | 0.169 ms | 1.451 ms | 3.636 ms |
+| 900 | **0.298 ms** | 0.368 ms | 3.380 ms | 8.519 ms |
+| 2,500 | **0.876 ms** | 1.092 ms | 9.481 ms | 22.647 ms |
 
-Read the middle column first. Against another C++ DWA this repo is within
-10–20 percent — near parity, not a win. Most of the 60× over PythonRobotics is
-Python versus C++, and most of the 8–12× over goktug97 is that it walks a point
-cloud per sample where this repo does an O(1) costmap lookup.
+Worst spread over the three runs: 6% for this repo, 9% for CppRobotics, 14%
+for goktug97, 11% for amslabtech.
 
-That lookup is the one structural difference, and it shows up as flat scaling
-in clutter (Python side, 400 trajectories):
+**Python** — `bench/dwa_compare.py`
 
-| Obstacles | This repo | PythonRobotics |
-| ---: | ---: | ---: |
-| 20 | 0.64 ms | 29.40 ms |
-| 500 | 0.64 ms | 68.17 ms |
-| 2,000 | 0.64 ms | **326.99 ms** |
+| Trajectories | This repo | [PythonRobotics](https://github.com/AtsushiSakai/PythonRobotics) | [kmilo7204](https://github.com/kmilo7204/dwa_python) |
+| ---: | ---: | ---: | ---: |
+| 36 | **0.31 ms** | 2.66 ms | 4.12 ms |
+| 100 | **0.36 ms** | 8.53 ms | 11.43 ms |
+| 400 | **0.77 ms** | 37.69 ms | 46.93 ms |
+| 900 | **1.83 ms** | 86.40 ms | 103.52 ms |
+| 2,500 | **4.21 ms** | 246.36 ms | 284.50 ms |
 
-Flat versus linear. A costmap has to be built and maintained, so this is a
-trade rather than a free win.
+Worst spread: 18% for this repo at 900 trajectories, 7% everywhere else.
 
-ROS-coupled implementations (`nav2_dwb_controller`, `amslabtech/dwa_planner`,
-`teb_local_planner`) are not in the table: they need a live ROS 2 graph and
-costmap plugins to run at all, so any number taken outside that would be
-measuring the harness. The Nav2 comparison below uses their published figures
-instead.
+Read the CppRobotics column first. Against another C++ DWA this repo is 20 to
+25 percent quicker across the range, which is a margin and not a rout, and it
+is the row that makes the rest of the table worth reading: the gaps elsewhere
+are structural rather than a faster inner loop.
+
+An earlier version of this table had this repo *losing* the 36-trajectory row,
+0.017 ms against 0.013. Three fresh runs of both put it at 0.012 against
+0.015, which is outside the spread in the other direction. The old numbers are
+not reproducible from this tree and have been replaced rather than explained.
+
+The structure is that every baseline here keeps an explicit obstacle list and
+measures each rollout point against every obstacle, while this repo reads one
+costmap cell. amslabtech does that per point in C++ with no vectorisation,
+which is the 26× at 2,500 trajectories. goktug97 walks a point cloud per
+sample, which is the 8–11×. PythonRobotics vectorises the comparison over
+numpy and kmilo7204 does not, which is why they sit where they do relative to
+each other.
+
+It shows up directly as flat scaling in clutter (Python side, 400
+trajectories):
+
+| Obstacles | This repo | PythonRobotics | kmilo7204 |
+| ---: | ---: | ---: | ---: |
+| 20 | 0.73 ms | 33.86 ms | 41.26 ms |
+| 100 | 0.73 ms | 41.42 ms | 48.91 ms |
+| 500 | 0.73 ms | 77.59 ms | 88.37 ms |
+| 2,000 | **0.73 ms** | 320.63 ms | **426.93 ms** |
+
+Flat versus linear, and flat to the 1% spread of the measurement. A costmap has
+to be built and maintained by something else first, so this is a trade rather
+than a free win.
+
+`amslabtech/dwa_planner` is a ROS node, so its scoring core is transcribed into
+`bench/baseline_amslabtech.cpp` rather than included — `motion`,
+`generate_trajectory`, `calc_dynamic_window`, `calc_to_goal_cost`,
+`calc_obs_cost` and `calc_speed_cost`, with only Eigen and the message types
+stubbed. `python3 bench/verify_amslabtech.py` diffs each of those bodies
+against the upstream file and reports which substitutions were made; on the
+current upstream it reports every lifted body identical, one of them after the
+`Eigen::Vector3d` stub swap.
+
+`nav2_dwb_controller` and the other nav2 local controllers are not in this
+table and cannot be: they need a live ROS 2 graph and costmap plugins to run at
+all, so any number taken here would be measuring the harness. They are measured
+in that live graph instead, against this repo's DWA on the same robot, the same
+costmap settings and the same path — see **The nav2 field** in `sim/README.md`.
 
 ## Global planner vs Nav2
 
@@ -182,9 +231,9 @@ occupancy maps at 5 cm resolution (2000 × 2000 cells), ~50 m paths.
 
 | Density | This repo, C++ A\* | Smac 2D-A\* | NavFn | Hybrid-A\* | SBPL ARA\* |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 10% | **5.0 ms** | 66.2 ms | 71.1 ms | 39.1 ms | 5,640 ms |
-| 15% | **6.8 ms** | 85.6 ms | 66.5 ms | 40.7 ms | 6,587 ms |
-| 20% | **15.1 ms** | 88.8 ms | 61.0 ms | 38.8 ms | 6,633 ms |
+| 10% | **3.3 ms** | 66.2 ms | 71.1 ms | 39.1 ms | 5,640 ms |
+| 15% | **5.8 ms** | 85.6 ms | 66.5 ms | 40.7 ms | 6,587 ms |
+| 20% | **12.4 ms** | 88.8 ms | 61.0 ms | 38.8 ms | 6,633 ms |
 
 Read with the caveats. Their CPU (Ryzen 5 5600X) is considerably faster than
 the one these came off, which flatters this repo. Against that, Smac 2D-A\* is

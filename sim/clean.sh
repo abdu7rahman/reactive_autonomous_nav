@@ -48,6 +48,12 @@ PATS=("$L/dwa_controller" "$L/pure_pursuit_controller" "$L/stanley_controller"
       "$L/theta_star_planner" "$L/smac_planner" "$L/rrt_planner"
       "$L/rrt_smac_hybrid_planner"
       "nav2_costmap_2d/nav2_costmap_2d" "nav2_lifecycle_manager/lifecycle_manager"
+      # nav2's own controllers race in the nav2 field, one controller_server
+      # per lane, and this list did not know about them: four of them survived
+      # a clean and a stopped race, still subscribed to the paths and still
+      # publishing to /cmd_vel_unstamped, which is the exact failure the whole
+      # script exists to prevent.
+      "nav2_controller/controller_server"
       "bin/rviz2")
 zap TERM "${PATS[@]}"
 sleep 6

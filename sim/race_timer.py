@@ -39,14 +39,20 @@ and after the release each robot's own odometry has to show it moving; one
 that does not gets its path again, and the resend is reported, because a robot
 that started two seconds late did not run the same race as the other four.
 
-What gets released depends on the course.  On the straight it is five goals,
-one per robot, and each robot's own A* plans its way there.  On the chicane it
-is five copies of one reference path (race_path.py) straight onto /<ns>/plan,
+What gets released depends on the course and on who is racing.  On the
+straight it is five goals, one per robot, and each robot's own A* plans its way
+there.  On the chicane it is five copies of one reference path (race_path.py),
 because the question there is how each controller tracks the same curve and
 five separate A* runs on five rolling costmaps are five different curves.  The
 planners are not launched at all on the chicane -- see launch/race_launch.py --
 so nothing else is writing to /plan and the reference cannot be overwritten
 halfway up the course.
+
+How that path reaches a lane depends on what is in it.  This package's
+controllers take it on /<ns>/plan.  A nav2 controller plugin takes it as a
+FollowPath action goal on /<ns>/follow_path, which is the only way to hand a
+nav2 controller_server a path at all, and the goal carries the same path.  Both
+go out in the same loop, so the two kinds of lane start together.
 """
 from __future__ import annotations
 
@@ -60,12 +66,15 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.action import ActionClient
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
+from nav2_msgs.action import FollowPath
 
 from race_path import path_for
 from reactive_autonomous_nav.race_course import (
-    CONTROLLER, COSTMAP_RES, COURSE, GATES, LANES, RACE_LENGTH, START_Y)
+    CONTROLLER, COSTMAP_RES, COURSE, ENTRANTS, FIELD, GATES, LANES,
+    RACE_LENGTH, START_Y)
 
 # The lane positions, the start line and which controller is in which lane all
 # come from race_course.py, which is also what grid_tf.py pins each odom origin
@@ -96,6 +105,7 @@ class Timer(Node):
     def __init__(self) -> None:
         super().__init__('race_timer')
         self.t0: float | None = None
+        self.lane_x = {ns: x for ns, x, _c in GRID}
         self.progress = {ns: 0.0 for ns, _x, _c in GRID}
         self.moved = {ns: 0.0 for ns, _x, _c in GRID}
         self.finished: dict[str, float] = {}
@@ -106,14 +116,18 @@ class Timer(Node):
         # One or the other, never both: on a course with gates the reference
         # path goes straight to the controllers, on one without it the goal
         # goes to the planners.
-        if GATES:
-            self.release_pubs = {
-                ns: self.create_publisher(Path, f'/{ns}/plan', 10)
-                for ns, _x, _c in GRID}
-        else:
-            self.release_pubs = {
-                ns: self.create_publisher(PoseStamped, f'/{ns}/goal_pose', 10)
-                for ns, _x, _c in GRID}
+        self.release_pubs = {}
+        self.follow = {}
+        for ns, _x, _c in GRID:
+            if ENTRANTS[ns][0] == 'nav2':
+                self.follow[ns] = ActionClient(
+                    self, FollowPath, f'/{ns}/follow_path')
+            elif GATES:
+                self.release_pubs[ns] = self.create_publisher(
+                    Path, f'/{ns}/plan', 10)
+            else:
+                self.release_pubs[ns] = self.create_publisher(
+                    PoseStamped, f'/{ns}/goal_pose', 10)
 
     @property
     def sim(self) -> float:
@@ -142,14 +156,15 @@ class Timer(Node):
                 f'({len(self.finished)}/{len(GRID)})')
 
     def _listeners(self) -> int:
-        """Robots whose own controller is subscribed to what we are about to
-        publish.
+        """Lanes that can actually receive what we are about to send.
 
         By node name, not by count.  On a gated course the release goes to
         /<ns>/plan, and so does RViz: five Path displays, one per lane, which
         made a count of subscribers read 5/5 with no controller listening at
         all.  get_subscriptions_info_by_topic carries the node name, so the
-        question can be asked properly.
+        question can be asked properly.  A nav2 lane has no subscription to
+        count either way -- it is an action server, and whether it is up is
+        exactly what wait_for_server answers.
         """
         ready = 0
         for ns in self.release_pubs:
@@ -157,6 +172,8 @@ class Timer(Node):
             want = '_controller_node' if GATES else '_planner_node'
             ready += any(e.node_name.endswith(want)
                          for e in self.get_subscriptions_info_by_topic(topic))
+        for ns, client in self.follow.items():
+            ready += bool(client.server_is_ready())
         return ready
 
     def wait_for_listeners(self, secs: float) -> int:
@@ -191,9 +208,7 @@ class Timer(Node):
             if attempt:
                 late += [ns for ns in missing if ns not in late]
                 for ns in missing:
-                    self.release_pubs[ns].publish(
-                        self._plan(ns) if GATES else self._goal(dict(
-                            (n, x) for n, x, _c in GRID)[ns]))
+                    self._send(ns, self.lane_x[ns])
                 print(f'  resent to {" ".join(missing)} '
                       f'(attempt {attempt + 1})', flush=True)
             deadline = self.sim + CONFIRM
@@ -223,17 +238,31 @@ class Timer(Node):
             m.poses.append(p)
         return m
 
+    def _send(self, ns: str, x: float) -> None:
+        """Hand one lane its path, the way that lane can take it."""
+        if ns in self.follow:
+            goal = FollowPath.Goal()
+            goal.path = self._plan(ns)
+            goal.controller_id = 'FollowPath'
+            goal.goal_checker_id = 'general_goal_checker'
+            self.follow[ns].send_goal_async(goal)
+        else:
+            self.release_pubs[ns].publish(
+                self._plan(ns) if GATES else self._goal(x))
+
     def release(self) -> None:
         """All five at once: the goal, or the reference path."""
         for ns, x, _c in GRID:
-            self.release_pubs[ns].publish(
-                self._plan(ns) if GATES else self._goal(x))
+            self._send(ns, x)
         self.t0 = self.sim
         self.moved = {ns: self.t0 for ns, _x, _c in GRID}
         what = (f'{len(self._plan(GRID[0][0]).poses)}-point reference paths'
                 if GATES else f'goals {RACE_LENGTH:.1f} m ahead')
-        print(f'grid released at sim {self.t0:.1f}s on the {COURSE}: '
-              f'{what}, finish line {FINISH:.2f} m', flush=True)
+        how = (f' ({len(self.follow)} of them as FollowPath goals)'
+               if self.follow else '')
+        print(f'grid released at sim {self.t0:.1f}s on the {COURSE}, '
+              f'field {FIELD}: {what}{how}, finish line {FINISH:.2f} m',
+              flush=True)
 
 
 def main() -> int:
@@ -292,7 +321,7 @@ def main() -> int:
             print(f'  sim {t.sim - t.t0:6.1f}s  {row}', flush=True)
 
     print('', flush=True)
-    print(f'race over: {reason}', flush=True)
+    print(f'race over: {reason} at {t.sim - t.t0:.1f}s', flush=True)
     print('finish order (simulated seconds from the grid release):', flush=True)
     order = sorted(GRID, key=lambda g: (t.finished.get(g[0], float('inf')),
                                         -t.progress[g[0]]))

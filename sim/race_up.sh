@@ -80,6 +80,20 @@ start "$SIM/clock.pid" ros2 run ros_gz_bridge parameter_bridge \
       /clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock
 sleep 5
 
+# Is there a simulator at all?  This is not ceremony.  `gz sim` segfaulted on
+# start once -- five seconds after a teardown, so probably before the previous
+# server had released its shared memory -- and everything after it carried on
+# regardless: the wall loop reported "18/18 walls spawned" against a world that
+# did not exist, because `gz service` against a dead server exits zero, and the
+# five robot spawns then burned their 90-second timeouts one after another. A
+# clock reading is the one thing that cannot be true without a running world.
+if [ -z "$(sim_now)" ]; then
+  echo "no /clock -- gazebo did not come up; aborting"
+  tail -3 "$SIM/gz.log" 2>/dev/null | sed 's/^/    /'
+  exit 1
+fi
+echo "simulator clock at $(sim_now)s"
+
 # The dock is not spawned here at all -- it belongs to the stock bringup -- but
 # the warehouse's own shelving is, and the start line sits on open floor.
 # The chicane first, so the walls are in the world before the lidars are.
@@ -95,7 +109,15 @@ while IFS=$'\t' read -r name sdf; do
     gates=$((gates + 1))
   fi
 done < <(python3 $G/grid_tf.py --gates)
-echo "course walls spawned: $gates/$N_WALLS"
+# What the world has, not what the service calls returned.  `gz service`
+# exits zero whether or not a server answered, so $gates counts attempts.
+if [ "$N_WALLS" -gt 0 ]; then
+  inworld=$(timeout 30 gz model --list 2>/dev/null | grep -c -- "- *gate_" || true)
+  echo "course walls spawned: $gates/$N_WALLS (in the world: ${inworld:-0})"
+  gates=${inworld:-0}
+else
+  echo "course has no walls"
+fi
 
 for lane in $LANES; do
   ns=${lane%%:*}; x=${lane##*:}
