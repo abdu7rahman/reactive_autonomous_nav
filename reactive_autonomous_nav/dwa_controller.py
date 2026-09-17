@@ -105,10 +105,34 @@ class DWAControllerNode(Node):
         self.max_vel            = 0.50
         self.min_vel            = 0.0
         self.max_yawrate        = 2.0
-        self.max_accel          = 0.4
-        self.max_dyawrate       = 1.0
+        # The accelerations are the robot's own, out of
+        # irobot_create_control/config/control.yaml -- the same numbers
+        # sim/race_robot.py puts into Gazebo's DiffDrive. They were 0.4 and
+        # 1.0, which is 2.2 and 7.7 times more conservative than the plant,
+        # and the dynamic window is defined as the velocities reachable in the
+        # next interval given the robot's accelerations (Fox, Burgard and
+        # Thrun): at 1.0 rad/s^2 it was not that, it was a rate limiter. The
+        # consequence is asymmetric and it is the expensive half -- a
+        # controller that can only add 0.1 rad/s of turn per tick can also only
+        # take 0.1 rad/s away, so once it is turning at 1.4 rad/s it needs
+        # fourteen ticks to stop, and by then it has driven a circle. Runs that
+        # never reached their goal looked exactly like that.
+        #
+        # Measured on bench/test_planners.py: maze-wide-153 325 -> 306 steps
+        # and 12.82 -> 12.33 m, rooms-200 469 -> 456 steps and 21.13 -> 20.90 m.
+        # Fewer steps and a shorter path on both. Keeping the sampling
+        # resolution: coarsening it to hold the rollout count down (0.03 and
+        # 0.15) measured worse than either, 396 and 586 steps.
+        self.max_accel          = 0.9
+        self.max_dyawrate       = 7.725
         self.vel_res            = 0.02
         self.yawrate_res        = 0.04
+        # How many of the fan to draw.  The window is 13 times wider than it
+        # was, so the fan is about 390 rollouts rather than 30, and every one
+        # of them was a MarkerArray entry built from 25 Points in a Python
+        # loop -- 9,750 Point constructions a tick, on a 100 ms budget, for a
+        # picture that is a grey smear at 390 lines anyway.
+        self.traj_draw          = 48
         self.predict_time       = 2.5
         self.dt                 = 0.1
         self.heading_cost_gain  = 5.0
@@ -486,7 +510,16 @@ class DWAControllerNode(Node):
             s_max = scores[valid_mask].max()
             s_range = max(s_max - s_min, 1e-6)
 
-        for i in range(N):
+        # An evenly spaced sample of the fan, which is ordered by (v, omega),
+        # so the sample spans it rather than clustering in one corner. DELETEALL
+        # first because the fan's size follows the window and RViz keeps a
+        # marker until something replaces or deletes it.
+        clear = Marker()
+        clear.action = Marker.DELETEALL
+        ma.markers.append(clear)
+        stride = max(1, N // self.traj_draw)
+
+        for i in range(0, N, stride):
             if lethal_mask[i]:
                 # thin red — lethal
                 ma.markers.append(self._make_traj_marker(

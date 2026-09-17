@@ -10,7 +10,13 @@
 # between them would be inviting a reader to read noise as a result.
 G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 mkdir -p $G/gif $G/run/log
-SECS=${SECS:-260}
+# 400, not 260.  The capture window has to outlast the slowest run at
+# whatever real-time factor the machine happens to be giving: the slowest of
+# the ten arrived 213 s into a 260 s window at a playback factor of 7.0, and a
+# later batch measured 8.4 to 10.8, which puts the same run at 256 to 330 s and
+# past the edge.  drive.sh trims each clip to its own arrival, so a window with
+# room in it costs capture time and not a byte of gif.
+SECS=${SECS:-400}
 
 # Skip a clip that is already recorded, so a batch stopped halfway can be
 # restarted without paying again for the runs that already worked.  Delete the
