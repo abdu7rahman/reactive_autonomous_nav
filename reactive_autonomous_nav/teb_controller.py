@@ -70,8 +70,23 @@ def _costs_from_grid(msg):
 
 class TEBControllerNode(Node):
 
+    # Frame names, so more than one of these can run in one graph.
+    #
+    # They were literals, which is fine for one robot and impossible for five:
+    # every node looked up 'base_link' and every path went out stamped 'map',
+    # so five of them in one ROS graph would all have been talking about the
+    # same robot. They are parameters now, and these class-level defaults keep
+    # the single-robot case exactly as it was -- and keep bench/rig.py working,
+    # since it builds nodes with object.__new__ and never runs __init__.
+    map_frame  = 'map'
+    odom_frame = 'odom'
+    base_frame = 'base_link'
+
     def __init__(self):
         super().__init__('teb_controller_node')
+        self.map_frame  = self.declare_parameter('map_frame',  'map').value
+        self.odom_frame = self.declare_parameter('odom_frame', 'odom').value
+        self.base_frame = self.declare_parameter('base_frame', 'base_link').value
 
         self.max_vel        = 0.4
         self.max_yawrate    = 1.5
@@ -116,7 +131,7 @@ class TEBControllerNode(Node):
 
         self.driven_path = Path()
 
-        self.driven_path.header.frame_id = 'map'
+        self.driven_path.header.frame_id = self.map_frame
 
 
         self.tf_buffer   = Buffer()
@@ -244,7 +259,7 @@ class TEBControllerNode(Node):
         covers all five.
         """
         ps = PoseStamped()
-        ps.header.frame_id    = 'map'
+        ps.header.frame_id    = self.map_frame
         ps.header.stamp       = self.get_clock().now().to_msg()
         ps.pose.position.x    = float(x)
         ps.pose.position.y    = float(y)
@@ -258,7 +273,7 @@ class TEBControllerNode(Node):
         if self.current_pose is None or not self.band:
             return
 
-        pose = self._get_tf('map', 'base_link')
+        pose = self._get_tf(self.map_frame, self.base_frame)
         if pose is None:
             return
         rx, ry, ryaw = pose
@@ -406,7 +421,7 @@ class TEBControllerNode(Node):
     def _publish_band(self):
         ma = MarkerArray()
         m = Marker()
-        m.header.frame_id = 'map'
+        m.header.frame_id = self.map_frame
         m.header.stamp = self.get_clock().now().to_msg()
         m.ns = 'band'
         m.id = 0

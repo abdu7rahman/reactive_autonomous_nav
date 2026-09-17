@@ -20,8 +20,23 @@ from tf2_ros                import TransformListener, Buffer
 
 class PurePursuitControllerNode(Node):
 
+    # Frame names, so more than one of these can run in one graph.
+    #
+    # They were literals, which is fine for one robot and impossible for five:
+    # every node looked up 'base_link' and every path went out stamped 'map',
+    # so five of them in one ROS graph would all have been talking about the
+    # same robot. They are parameters now, and these class-level defaults keep
+    # the single-robot case exactly as it was -- and keep bench/rig.py working,
+    # since it builds nodes with object.__new__ and never runs __init__.
+    map_frame  = 'map'
+    odom_frame = 'odom'
+    base_frame = 'base_link'
+
     def __init__(self):
         super().__init__('pure_pursuit_controller_node')
+        self.map_frame  = self.declare_parameter('map_frame',  'map').value
+        self.odom_frame = self.declare_parameter('odom_frame', 'odom').value
+        self.base_frame = self.declare_parameter('base_frame', 'base_link').value
 
         # ── Params ───────────────────────────────────────────────────
         self.lookahead_dist     = 0.4    # m
@@ -38,7 +53,7 @@ class PurePursuitControllerNode(Node):
 
         # ── TF ───────────────────────────────────────────────────────
         self.driven_path = Path()
-        self.driven_path.header.frame_id = 'map'
+        self.driven_path.header.frame_id = self.map_frame
 
         self.tf_buffer   = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -67,7 +82,7 @@ class PurePursuitControllerNode(Node):
     def _get_robot_pose(self):
         try:
             t = self.tf_buffer.lookup_transform(
-                'map', 'base_link', rclpy.time.Time(), Duration(seconds=0.5))
+                self.map_frame, self.base_frame, rclpy.time.Time(), Duration(seconds=0.5))
             tr = t.transform.translation
             rot = t.transform.rotation
             yaw = math.atan2(2.0 * (rot.w * rot.z + rot.x * rot.y),
@@ -90,7 +105,7 @@ class PurePursuitControllerNode(Node):
         covers all five.
         """
         ps = PoseStamped()
-        ps.header.frame_id    = 'map'
+        ps.header.frame_id    = self.map_frame
         ps.header.stamp       = self.get_clock().now().to_msg()
         ps.pose.position.x    = float(x)
         ps.pose.position.y    = float(y)
@@ -206,7 +221,7 @@ class PurePursuitControllerNode(Node):
         from std_msgs.msg import ColorRGBA
         
         marker = Marker()
-        marker.header.frame_id = 'map'
+        marker.header.frame_id = self.map_frame
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.ns = 'pure_pursuit'
         marker.id = 0

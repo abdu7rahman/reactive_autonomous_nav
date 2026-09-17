@@ -68,8 +68,23 @@ def _costs_from_grid(msg):
 
 class DWAControllerNode(Node):
 
+    # Frame names, so more than one of these can run in one graph.
+    #
+    # They were literals, which is fine for one robot and impossible for five:
+    # every node looked up 'base_link' and every path went out stamped 'map',
+    # so five of them in one ROS graph would all have been talking about the
+    # same robot. They are parameters now, and these class-level defaults keep
+    # the single-robot case exactly as it was -- and keep bench/rig.py working,
+    # since it builds nodes with object.__new__ and never runs __init__.
+    map_frame  = 'map'
+    odom_frame = 'odom'
+    base_frame = 'base_link'
+
     def __init__(self):
         super().__init__('dwa_controller_node')
+        self.map_frame  = self.declare_parameter('map_frame',  'map').value
+        self.odom_frame = self.declare_parameter('odom_frame', 'odom').value
+        self.base_frame = self.declare_parameter('base_frame', 'base_link').value
 
         # ── DWA params ───────────────────────────────────────────────
         self.max_vel            = 0.50
@@ -106,7 +121,7 @@ class DWAControllerNode(Node):
         self.best_mid         = 0
 
         self.driven_path = Path()
-        self.driven_path.header.frame_id = 'map'
+        self.driven_path.header.frame_id = self.map_frame
 
         # ── TF ───────────────────────────────────────────────────────
         self.tf_buffer   = Buffer()
@@ -152,7 +167,7 @@ class DWAControllerNode(Node):
         self.recovery_mode = False
         self.best_mid      = 0
 
-        map_pose = self._get_tf('map', 'base_link')
+        map_pose = self._get_tf(self.map_frame, self.base_frame)
         if map_pose is not None:
             rx, ry, rtheta = map_pose
             best_idx  = 0
@@ -414,7 +429,7 @@ class DWAControllerNode(Node):
     # ================================================================
     def _record_pose(self, x, y):
         ps = PoseStamped()
-        ps.header.frame_id    = 'map'
+        ps.header.frame_id    = self.map_frame
         ps.header.stamp       = self.get_clock().now().to_msg()
         ps.pose.position.x    = x
         ps.pose.position.y    = y
@@ -429,7 +444,7 @@ class DWAControllerNode(Node):
     # ================================================================
     def _make_traj_marker(self, x_row, y_row, mid, r, g, b, a, w):
         m = Marker()
-        m.header.frame_id = 'odom'
+        m.header.frame_id = self.odom_frame
         m.header.stamp    = self.get_clock().now().to_msg()
         m.ns     = 'candidates'
         m.id     = mid
@@ -478,7 +493,7 @@ class DWAControllerNode(Node):
         """Thick bright-green glow for the chosen trajectory."""
         ma = MarkerArray()
         m = Marker()
-        m.header.frame_id = 'odom'
+        m.header.frame_id = self.odom_frame
         m.header.stamp    = self.get_clock().now().to_msg()
         m.ns     = 'best'
         m.id     = self.best_mid
@@ -507,7 +522,7 @@ class DWAControllerNode(Node):
 
     def _publish_goal_marker(self, gx, gy):
         m = Marker()
-        m.header.frame_id = 'map'
+        m.header.frame_id = self.map_frame
         m.header.stamp    = self.get_clock().now().to_msg()
         m.ns     = 'dwa_goal'
         m.id     = 0
@@ -536,12 +551,12 @@ class DWAControllerNode(Node):
                                    throttle_duration_sec=3.0)
             return
 
-        map_pose = self._get_tf('map', 'base_link')
+        map_pose = self._get_tf(self.map_frame, self.base_frame)
         if map_pose is None:
             return
         mx, my, mtheta = map_pose
 
-        odom_pose = self._get_tf('odom', 'base_link')
+        odom_pose = self._get_tf(self.odom_frame, self.base_frame)
         ox, oy, otheta = odom_pose if odom_pose else (mx, my, mtheta)
 
         self.position_history.append((mx, my))
@@ -605,7 +620,7 @@ class DWAControllerNode(Node):
         self._publish_goal_marker(gx_map, gy_map)
 
         # ── convert goal map→odom for DWA rollout ────────────────────
-        odom_from_map = self._get_tf('odom', 'map')
+        odom_from_map = self._get_tf(self.odom_frame, self.map_frame)
         if odom_from_map is not None:
             tmx, tmy, tyaw = odom_from_map
             gx_odom = math.cos(tyaw) * gx_map - math.sin(tyaw) * gy_map + tmx

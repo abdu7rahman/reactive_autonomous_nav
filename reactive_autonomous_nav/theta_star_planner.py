@@ -62,8 +62,23 @@ def _costs_from_grid(msg):
 
 class ThetaStarPlannerNode(Node):
 
+    # Frame names, so more than one of these can run in one graph.
+    #
+    # They were literals, which is fine for one robot and impossible for five:
+    # every node looked up 'base_link' and every path went out stamped 'map',
+    # so five of them in one ROS graph would all have been talking about the
+    # same robot. They are parameters now, and these class-level defaults keep
+    # the single-robot case exactly as it was -- and keep bench/rig.py working,
+    # since it builds nodes with object.__new__ and never runs __init__.
+    map_frame  = 'map'
+    odom_frame = 'odom'
+    base_frame = 'base_link'
+
     def __init__(self):
         super().__init__('theta_star_planner_node')
+        self.map_frame  = self.declare_parameter('map_frame',  'map').value
+        self.odom_frame = self.declare_parameter('odom_frame', 'odom').value
+        self.base_frame = self.declare_parameter('base_frame', 'base_link').value
 
         # ── state ────────────────────────────────────────────────────
         self.global_data   = None
@@ -156,7 +171,7 @@ class ThetaStarPlannerNode(Node):
     def _get_odom_to_map(self):
         try:
             t = self.tf_buffer.lookup_transform(
-                'map', 'odom', rclpy.time.Time(), Duration(seconds=0.2))
+                self.map_frame, self.odom_frame, rclpy.time.Time(), Duration(seconds=0.2))
             tr  = t.transform.translation
             rot = t.transform.rotation
             yaw = math.atan2(2.0 * (rot.w * rot.z + rot.x * rot.y),
@@ -168,7 +183,7 @@ class ThetaStarPlannerNode(Node):
     def _get_robot_pose(self):
         try:
             t = self.tf_buffer.lookup_transform(
-                'map', 'base_link', rclpy.time.Time(), Duration(seconds=0.5))
+                self.map_frame, self.base_frame, rclpy.time.Time(), Duration(seconds=0.5))
             return t.transform.translation.x, t.transform.translation.y
         except Exception as e:
             self.get_logger().warn(f'TF lookup failed: {e}')
@@ -511,7 +526,7 @@ class ThetaStarPlannerNode(Node):
         ma  = MarkerArray()
 
         m = Marker()
-        m.header.frame_id = 'map'
+        m.header.frame_id = self.map_frame
         m.header.stamp    = now
         m.ns     = 'explored'
         m.id     = 0
@@ -546,7 +561,7 @@ class ThetaStarPlannerNode(Node):
             (gx, gy, 1.0, 0.3, 0.3, 'goal'),
         ]):
             m = Marker()
-            m.header.frame_id = 'map'
+            m.header.frame_id = self.map_frame
             m.header.stamp    = now
             m.ns = label
             m.id = i
@@ -638,7 +653,7 @@ class ThetaStarPlannerNode(Node):
             [self._g2w(r, c) for r, c in path_cells]))
 
         path_msg = Path()
-        path_msg.header.frame_id = 'map'
+        path_msg.header.frame_id = self.map_frame
         path_msg.header.stamp    = self.get_clock().now().to_msg()
         for wx, wy in path_world:
             ps = PoseStamped()
