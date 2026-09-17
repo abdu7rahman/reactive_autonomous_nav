@@ -40,6 +40,6 @@ else
 fi
 
 ffmpeg -loglevel error -y $TRIM -i "$MP4" -vf \
-  "setpts=PTS/$SPEED,fps=10,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=48[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3" \
+  "setpts=PTS/$SPEED,fps=8,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=48[p];[s1][p]paletteuse=dither=none" \
   -loop 0 "$G/gif/$TAG.gif" < /dev/null
 ls -la "$G/gif/$TAG.gif" | awk '{printf "  %s  %d KB\n", $9, $5/1024}'

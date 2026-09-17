@@ -158,7 +158,7 @@ TRIM=""
 # 48 colours is plenty for RViz's flat fills; 560 px keeps a ten-clip set to a
 # size a repository can carry and still reads at a glance.
 ffmpeg -loglevel error -y $TRIM -i "$RUN/$TAG.mp4" -vf \
-  "setpts=PTS/$SPEED,fps=10,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=48[p];[s1][p]paletteuse=dither=bayer:bayer_scale=3" \
+  "setpts=PTS/$SPEED,fps=8,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=48[p];[s1][p]paletteuse=dither=none" \
   -loop 0 "$G/gif/$TAG.gif" < /dev/null
 
 # start() writes each process's output beside its pid file
