@@ -436,6 +436,37 @@ class ThetaStarPlannerNode(Node):
     # ================================================================
     #  RViz marker helpers
     # ================================================================
+    def _resample(self, pts):
+        """Fill in the straight runs between Theta*'s corners.
+
+        Theta* earns its any-angle path by keeping only the vertices where the
+        direction changes, so a clear route across the warehouse came out as
+        four waypoints where A* gave 199 for the same start and goal.  That is
+        the planner working correctly, but it breaks the contract every local
+        controller in this package is written against: they take a lookahead a
+        fixed number of *waypoints* ahead, which assumes waypoints are spaced
+        at about the costmap resolution.  Handed four, DWA's eight-waypoint
+        lookahead lands on the goal itself and it steers at a point five metres
+        away on the far side of an obstacle -- measured, wp=1/4 dist=4.36m,
+        creeping into the barrier at 0.09 m/s.
+
+        Resampling here rather than widening the lookahead keeps each
+        controller's own tuning, which was swept against dense paths, and makes
+        /plan mean the same thing whichever planner produced it.  The search
+        itself is untouched: these are the same segments, just sampled along.
+        """
+        if not pts or len(pts) < 2:
+            return pts
+        step = self.global_info.resolution if self.global_info else 0.05
+        out = [pts[0]]
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            d = math.hypot(x1 - x0, y1 - y0)
+            n = max(1, int(d / step))
+            for i in range(1, n + 1):
+                t = i / n
+                out.append((x0 + t * (x1 - x0), y0 + t * (y1 - y0)))
+        return out
+
     def _publish_explored(self, explored, path_cells):
         path_set = set(map(tuple, path_cells)) if path_cells else set()
         rejected = [c for c in explored if tuple(c) not in path_set]
@@ -569,7 +600,8 @@ class ThetaStarPlannerNode(Node):
             self.status_pub.publish(String(data=s))
             return
 
-        path_world = [self._g2w(r, c) for r, c in path_cells]
+        path_world = self._resample(
+            [self._g2w(r, c) for r, c in path_cells])
 
         path_msg = Path()
         path_msg.header.frame_id = 'map'
