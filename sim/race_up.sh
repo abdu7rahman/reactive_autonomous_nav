@@ -70,6 +70,21 @@ sleep 5
 
 # The dock is not spawned here at all -- it belongs to the stock bringup -- but
 # the warehouse's own shelving is, and the start line sits on open floor.
+# The chicane first, so the walls are in the world before the lidars are.
+# Spawned as static SDF models rather than edited into the world file: the
+# world is turtlebot4_gz_bringup's and this leaves it alone, and grid_tf.py
+# stays the only place the course is described.
+gates=0
+while IFS=$'\t' read -r name sdf; do
+  [ -z "$name" ] && continue
+  if timeout 60 gz service -s /world/warehouse/create \
+      --reqtype gz.msgs.EntityFactory --reptype gz.msgs.Boolean --timeout 20000 \
+      --req "sdf: '$sdf', name: '$name', allow_renaming: false" > /dev/null 2>&1; then
+    gates=$((gates + 1))
+  fi
+done < <(python3 $G/grid_tf.py --gates)
+echo "chicane: $gates walls spawned"
+
 for lane in $LANES; do
   ns=${lane%%:*}; x=${lane##*:}
   python3 $G/race_robot.py "$ns" > "$SIM/$ns.urdf"
@@ -134,4 +149,9 @@ for lane in $LANES; do
   [ "$n$m" = "11" ] && ok=$((ok + 1))
 done
 echo "robots live: $ok/5"
-[ "$ok" = "5" ] && echo RACEUP || echo "RACEUP FAILED"
+if [ "$ok" = "5" ] && [ "$gates" = "15" ]; then
+  echo RACEUP
+else
+  echo "RACEUP FAILED -- robots $ok/5, chicane walls $gates/15"
+  exit 1
+fi

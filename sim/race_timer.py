@@ -11,8 +11,10 @@ of the race.
 
 Progress is the robot's own odometry x.  Each robot's odom frame is created
 where it was spawned with x along the heading it spawned in (see race_up.sh),
-so odom x is distance up the straight -- no transform, no localiser, and the
-same quantity for all five.
+so odom x is distance along the course -- no transform, no localiser, and the
+same quantity for all five.  It stays the right quantity now the course has a
+chicane in it: the weave is across the course, which is odom y, and odom x is
+still how far up it the robot has got.
 
 The finish line is 6.0 - 0.15 - 0.05 = 5.80 m for a 6.0 m goal: the goal
 distance, less the goal tolerance every controller in this package stops
@@ -45,7 +47,7 @@ from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry
 
-from grid_tf import LANES, START_Y
+from grid_tf import LANES, START_Y, RACE_LENGTH
 
 # Which controller is in which lane -- the same assignment as
 # launch/race_launch.py's GRID.  The lane positions and the start line come
@@ -54,7 +56,6 @@ from grid_tf import LANES, START_Y
 CONTROLLER = {'r1': 'dwa', 'r2': 'pure_pursuit', 'r3': 'stanley',
               'r4': 'teb', 'r5': 'mppi'}
 GRID = [(ns, x, CONTROLLER[ns]) for ns, x in LANES.items()]
-RACE_LENGTH = 6.0
 GOAL_TOL = 0.15                     # every controller in this package
 COSTMAP_RES = 0.05                  # config/race_costmap_params.yaml
 FINISH = RACE_LENGTH - GOAL_TOL - COSTMAP_RES
