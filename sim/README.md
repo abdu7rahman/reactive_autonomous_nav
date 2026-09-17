@@ -395,7 +395,13 @@ hoping.
 | `localize.py` | `map -> odom` from ground truth |
 | `check_align.py` | score a live scan against the served map |
 | `wait_topic.py` | block until a topic delivers, instead of sleeping |
+| `wait_tf.py` | block until the transform chain settles and stays settled |
+| `clock_now.py` | read the simulator's clock, with a real discovery window |
+| `lifecycle_up.py` | configure and activate lifecycle nodes, one at a time |
 | `watch.py` | the robot's map pose and distance to goal, live |
+| `reencode.sh` | rebuild a gif from a capture already on disk |
+| `stopbatch.sh` | stop a batch without touching the world |
+| `stopall.sh` | stop the chained bringup-and-batch runner and everything under it |
 | `nav.rviz` | one view covering every planner's and controller's own markers |
 | `lib.sh` | process helpers, and the Fast DDS profile every process picks up |
 | `race_up.sh` | the warehouse, five robots, the clock bridge and the odom pins |
@@ -403,14 +409,43 @@ hoping.
 | `stoprace.sh` | stop a race and everything it started, leaving the world up |
 | `race_robot.py` | the TurtleBot 4 description, stripped to what a race uses |
 | `grid_tf.py` | where the grid is, and the transforms that pin it into `map` |
-| `costmap_up.py` | the ten costmaps through their lifecycle, one at a time |
 | `race_timer.py` | releases the grid and times it against the robots' odometry |
 | `race.rviz` | all five robots in one view, one colour each |
 | `fastdds_udp.xml` | UDP only, because shared memory ran out of ports |
 
-`clean.sh` and `lib.sh` are more careful about killing processes than they look
-like they need to be. A pattern typed on a command line also appears in the
-argv of the shell running that command, so an unguarded `pkill` kills its own
-caller; that happened twice here, each time surfacing only as exit code 144.
-Patterns live in script files and `clean.sh` walks its own ancestry and refuses
+### Two things this harness is careful about, and why
+
+**Nothing reads the `ros2` command line for anything that matters.** The CLI
+gives discovery about a second, and on this machine under load with forty-odd
+participants that is not enough: `ros2 node list` returned 0 nodes in a graph
+where a 30-second rclpy subscription found `/scan`, `/odom` and `/clock` all
+delivering, and `ros2 lifecycle get /map_server` answered `Node not found` for
+a process that was alive and logging normally. With the CLI daemon running it
+answers from a stale cache instead -- ghosts of race robots dead for hours, two
+nodes claiming the same name, 20 nodes where 45 were running. `sim_up.sh` drove
+the map server's lifecycle through that CLI with both calls sent to `/dev/null`
+and printed `map served` either way, and the cost was batches recorded against
+a world whose global costmap had no map in it. `lifecycle_up.py` and
+`clock_now.py` are rclpy nodes with real discovery windows.
+
+**Every gate has to be able to fail.** `sim_up.sh` printed `core topics
+present: 2/4` and then `SIMUP`; `all.sh` had no check at all, so a two-hour
+batch would start against anything; and the first version of that check was
+`if ! sim_ok | tee ...`, which is not a check either, because a pipeline's
+status is its last command's and `tee` always succeeds. Both run `sim_ok` now,
+which reads the clock and waits for `/scan`, `/odom` and `/map` to deliver
+rather than counting entries in a topic list.
+
+`clean.sh`, `sim_down.sh` and the stop scripts are more careful about killing
+processes than they look like they need to be. A pattern typed on a command
+line also appears in the argv of the shell running that command, so an
+unguarded `pkill` kills its own caller; that happened four times here, each
+time surfacing only as exit code 144 with whatever edit was queued behind it
+lost. The patterns also have to be specific: a bare `dwa_controller` matches
+any process whose argv mentions the file, including an editor or a `grep`, and
+`turtlebot4_node` does not match `turtlebot4_gz_hmi_node` -- six of those
+accumulated across a day of bringups, ages 2.8 to 15.7 hours, one per teardown
+that reported leaving nothing running, and six stale participants on domain 0
+is enough to make the graph unreadable. Patterns live in script files, carry
+the installed path, and `clean.sh` walks its own ancestry and refuses
 to kill anything in it.
