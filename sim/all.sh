@@ -8,7 +8,9 @@
 # and the second name is a copy rather than a second run, because two runs of
 # the same pair would differ only by simulator noise and inviting a comparison
 # between them would be inviting a reader to read noise as a result.
+. /opt/rosenv.sh
 G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+. $G/lib.sh
 mkdir -p $G/gif $G/run/log
 # 600, not 260.  The capture window has to outlast the slowest run at
 # whatever real-time factor the machine happens to be giving, and the slowest
@@ -32,6 +34,21 @@ run() {  # planner controller tag
   stdbuf -oL bash $G/drive.sh "$1" "$2" "$3" "$SECS" 2>&1 \
     | stdbuf -oL grep -vE "^\[[0-9]+\]" | tee -a $G/run/log/batch.txt
 }
+
+# Refuse to start against a broken simulator. A batch is two hours; a bringup
+# that came up without a lidar cost exactly that once, and the only sign was a
+# line in sim_up.sh's log that nothing read.
+# `if ! sim_ok | tee ...` is not this check: a pipeline's status is its last
+# command's and tee always succeeds, so the gate could never fail. It was
+# written that way once and the batch started against a simulator with no
+# /map, launching a nav stack per run for as long as nobody looked.
+echo "=== simulator check" | tee -a $G/run/log/batch.txt
+sim_ok > $G/run/log/simcheck.txt 2>&1; ok=$?
+tee -a $G/run/log/batch.txt < $G/run/log/simcheck.txt
+if [ "$ok" != "0" ]; then
+  echo "simulator is not delivering -- run sim_up.sh first" | tee -a $G/run/log/batch.txt
+  exit 1
+fi
 
 touch $G/run/log/batch.txt
 

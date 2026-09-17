@@ -1,8 +1,21 @@
-"""Configure and activate the race's ten costmaps, one at a time.
+"""Configure and activate lifecycle nodes, one at a time, and say which took.
 
-    costmap_up.py [seconds_per_node]
+    lifecycle_up.py [seconds_per_node] [node ...]
 
-nav2_lifecycle_manager does this job, and for the race it does it badly.  It
+With no node names it does the race's ten costmaps.  Any names given replace
+that list, which is how sim_up.sh brings the map server up.
+
+`ros2 lifecycle set` does this job on a command line and cannot be relied on
+here at all: the CLI gives discovery about a second, and on this machine with
+forty-nine participants under load that is not enough, so it answers "Node not
+found" for a node whose process is alive and logging. `ros2 node list` returned
+0 nodes in the same graph where a 30-second rclpy subscription found /scan,
+/odom and /clock delivering. sim_up.sh drove the map server's two transitions
+that way with the output sent to /dev/null, printed "map served", and left the
+global costmap's static layer with no map -- for as long as nobody checked.
+
+nav2_lifecycle_manager does the same job for a list, and for the race it does
+it badly.  It
 brings its whole list up at once and treats any single failure as final: it
 logs "Failed to bring up all requested nodes. Aborting bringup" and never
 retries, so one robot losing a service call costs the entire race.  With five
@@ -40,9 +53,9 @@ from lifecycle_msgs.srv import ChangeState, GetState
 
 from grid_tf import LANES
 
-NODES = [f'/{ns}/{which}/{which}'
-         for ns in LANES
-         for which in ('local_costmap', 'global_costmap')]
+RACE_COSTMAPS = [f'/{ns}/{which}/{which}'
+                 for ns in LANES
+                 for which in ('local_costmap', 'global_costmap')]
 
 WANT = [(Transition.TRANSITION_CONFIGURE, State.PRIMARY_STATE_INACTIVE, 'configure'),
         (Transition.TRANSITION_ACTIVATE,  State.PRIMARY_STATE_ACTIVE,   'activate')]
@@ -52,7 +65,7 @@ TRIES = 4
 class Bringup(Node):
 
     def __init__(self) -> None:
-        super().__init__('costmap_up')
+        super().__init__('lifecycle_up')
 
     def state(self, node: str, budget: float) -> int:
         cli = self.create_client(GetState, f'{node}/get_state')
@@ -100,15 +113,17 @@ class Bringup(Node):
 
 
 def main() -> int:
-    budget = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    budget = float(args[0]) if args else 30.0
+    nodes = args[1:] or RACE_COSTMAPS
     rclpy.init()
     n = Bringup()
     ok = []
-    for node in NODES:
+    for node in nodes:
         good = n.bring_up(node, budget)
         ok.append(good)
         print(f'  {"active " if good else "FAILED "} {node}', flush=True)
-    print(f'costmaps active: {sum(ok)}/{len(NODES)}', flush=True)
+    print(f'active: {sum(ok)}/{len(nodes)}', flush=True)
     rclpy.shutdown()
     return 0 if all(ok) else 1
 

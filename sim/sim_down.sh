@@ -30,6 +30,15 @@ PATS=("gz sim" "parameter_bridge" "turtlebot4_spawn" "create3_nodes"
       # and one per robot from the five-robot attempt -- and were still in
       # `ros2 node list` three hours later, two of them claiming the same node
       # name in the same namespace.
+      #
+      # turtlebot4_gz_hmi_node is not matched by "turtlebot4_node", which is
+      # what this list had, and six of them accumulated across a day of
+      # bringups: ages 2.8 to 15.7 hours, one per teardown that thought it had
+      # left nothing running. Six stale participants on domain 0 is enough to
+      # break discovery outright -- `ros2 lifecycle get /map_server` answering
+      # "Node not found" for a process that ros2 node list could see, 20 of 45
+      # nodes visible, and ghosts of race robots that had been dead for hours.
+      "turtlebot4_gz_hmi_node"
       "joint_state_publisher" "spawner")
 for sig in TERM KILL; do
   for pat in "${PATS[@]}"; do

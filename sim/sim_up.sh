@@ -38,8 +38,15 @@ sleep 5
 start "$SIM/map.pid" ros2 run nav2_map_server map_server \
       --ros-args -p yaml_filename:=$MAP -p use_sim_time:=true
 sleep 8
-timeout 40 ros2 lifecycle set /map_server configure > /dev/null 2>&1
-timeout 40 ros2 lifecycle set /map_server activate  > /dev/null 2>&1
+# lifecycle_up.py, not `ros2 lifecycle set`: its header records what the CLI
+# does on this machine, which is answer "Node not found" for a live node
+# because it gives discovery about a second. Both transitions used to go to
+# /dev/null with "map served" printed either way, so a map server that never
+# configured looked exactly like one that did.
+if ! timeout 300 python3 $G/lifecycle_up.py 45 /map_server; then
+  echo "map server never activated -- aborting"
+  exit 1
+fi
 echo "map served"
 
 echo "waiting for the robot to finish spawning"
@@ -63,8 +70,12 @@ echo "dock moved clear of the spawn point"
 bash $G/reset.sh > /dev/null 2>&1
 
 echo "topics: $(timeout 25 ros2 topic list 2>/dev/null | wc -l)"
-have=$(timeout 25 ros2 topic list 2>/dev/null | grep -cE "^/(scan|odom|clock|map)$")
-echo "core topics present: $have/4"
+echo "--- the four topics a run cannot start without ---"
+if ! sim_ok; then
+  echo "SIMUP FAILED -- see above"
+  exit 1
+fi
+echo "  /clock /scan /odom /map all delivering"
 echo "--- scan against the served map ---"
 timeout 220 python3 $G/check_align.py --ros-args -p use_sim_time:=true 2>&1 | tail -2
 echo SIMUP

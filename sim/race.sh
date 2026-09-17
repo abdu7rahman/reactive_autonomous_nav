@@ -18,15 +18,6 @@ G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . $G/lib.sh
 export DISPLAY=:99
 
-# Fast DDS over UDP only, for this race and nothing else.  fastdds_udp.xml
-# records what the shared-memory transport does to a fifty-participant graph
-# on this machine.  It was exported from lib.sh at first, which put it on the
-# single-robot runs too, and those are a fourteen-node graph whose global
-# costmap is a 1.68 MB message: the batch that followed had four of ten clips
-# fail to reach their goal, with the planner logging "Replan: path blocked by
-# local obstacle" at a shelf corner every earlier batch had driven past.  The
-# race needs it; one robot does not.
-export FASTRTPS_DEFAULT_PROFILES_FILE="$G/fastdds_udp.xml"
 
 WALL=${1:-600}
 TAG=race
@@ -67,7 +58,7 @@ fi
 echo "    all five on the start line"
 
 # Bring the nav stack up, then walk the ten costmaps through their lifecycle
-# with costmap_up.py rather than leaving it to five nav2 lifecycle managers.
+# with lifecycle_up.py rather than leaving it to five nav2 lifecycle managers.
 # Its header says why: the managers abort the whole bringup permanently when a
 # single service call fails, which on this machine happened on most attempts,
 # and three consecutive full bringups were thrown away by relaunching around
@@ -77,7 +68,7 @@ up=0
 for attempt in 1 2 3; do
   start "$JOB/race.pid" ros2 launch reactive_autonomous_nav race_launch.py
   sleep 45
-  if timeout 900 python3 $G/costmap_up.py 30 2>&1 | tee "$JOB/costmaps.log" \
+  if timeout 900 python3 $G/lifecycle_up.py 30 2>&1 | tee "$JOB/costmaps.log" \
      | grep -q "costmaps active: 10/10"; then
     up=1
   fi
