@@ -128,9 +128,14 @@ class RRTPlannerNode(Node):
 
         # ── pubs ─────────────────────────────────────────────────────
         self.path_pub      = self.create_publisher(Path,        '/plan',             10)
-        self.status_pub    = self.create_publisher(String,      '/rrt_status',       10)
+        # /rrt_tree, and only that.  There were two more here -- /rrt_status
+        # and /rrt_markers -- created and never published to, and the second
+        # cost the recorded clip its search tree: both RViz configs displayed
+        # /rrt_markers, so the one planner whose whole character is the tree it
+        # grows showed an empty scene while /rrt_tree carried the tree.  An
+        # advertised topic that never carries a message is worse than no topic,
+        # because the display that subscribes to it looks like it is working.
         self.tree_pub      = self.create_publisher(MarkerArray, '/rrt_tree',         10)
-        self.marker_pub    = self.create_publisher(MarkerArray, '/rrt_markers',      10)
 
         self.get_logger().info('RRT Global Planner — ready')
 

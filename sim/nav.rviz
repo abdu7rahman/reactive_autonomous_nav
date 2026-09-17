@@ -91,10 +91,6 @@ Visualization Manager:
       Name: SmacMarkers
       Enabled: true
       Topic: {Value: /smac_markers, Reliability Policy: Reliable}
-    - Class: rviz_default_plugins/MarkerArray
-      Name: RrtMarkers
-      Enabled: true
-      Topic: {Value: /rrt_markers, Reliability Policy: Reliable}
     # --- what each controller is considering this tick ---------------------
     - Class: rviz_default_plugins/MarkerArray
       Name: DwaRollouts

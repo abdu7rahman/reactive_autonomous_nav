@@ -112,7 +112,6 @@ class TEBControllerNode(Node):
         self.force_obstacle = 0.5   # was force_obs (typo caused runtime crash)
         self.force_smooth   = 0.3
         self.force_dist     = 0.2
-        self.min_obs_dist   = 0.4
         # Vertex spacing, and it stopped being cosmetic when the command started
         # coming off the first interval: it now sets how much ground each
         # interval's heading is averaged over. Swept -- 0.10 fails both maps
@@ -387,7 +386,6 @@ class TEBControllerNode(Node):
                     v_nxt + self.max_accel * span,
                     w_nxt + self.max_yaw_accel * span)
 
-        self.band_dt = dt
         return float(seg[0]), float(dyaw[0]), float(dt[0])
 
     def _deform_band(self):

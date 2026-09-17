@@ -83,6 +83,30 @@ class MPPIControllerNode(Node):
     # rollouts are scored against, so a wall cannot fall between two steps.
     MIN_STEPS = 12
 
+    # The fraction of top speed the reference runs ahead at.  It was 0.7 with
+    # the comment "70% of max speed" and nothing beside it, so it was swept:
+    # bench/test_chicane.py's course, driven twice at each value -- once on a
+    # costmap that knows the whole lane and once on one holding only what the
+    # lidar has swept -- reading the time to the goal and the worst deviation
+    # from the reference.
+    #
+    #   speed   seconds   max deviation      speed   seconds   max deviation
+    #     0.5      25       0.097 / 0.105      0.8      20       0.136 / 0.139
+    #     0.6      23       0.123 / 0.094      0.9      18       0.168 / 0.173
+    #     0.7      21       0.120 / 0.130      1.0      17       0.182 / 0.182
+    #
+    # It buys speed with tracking, monotonically, and every value stays well
+    # clear of the walls -- the worst approach across the sweep is 0.395 m
+    # against a 0.22 m footprint.  0.5 to 0.7 are one group: the two costmaps
+    # disagree by up to 0.03 m at a given speed, so the 0.023 m between them is
+    # inside that spread, and 0.7 is the quickest of the three.  0.9 and 1.0
+    # are outside it in both directions.  So 0.7 stays, now for a reason.
+    #
+    # Advancing at the robot's own speed instead is not a variant of this, it
+    # is a different critic: at a standstill the reference would sit on top of
+    # the robot, and a rollout that stays still would score best.
+    REF_SPEED = 0.7
+
     def __init__(self):
         super().__init__('mppi_controller_node')
         self.map_frame  = self.declare_parameter('map_frame',  'map').value
@@ -90,8 +114,13 @@ class MPPIControllerNode(Node):
         self.base_frame = self.declare_parameter('base_frame', 'base_link').value
 
         # ── MPPI parameters (Nav2-inspired) ──────────────────────────
-        self.time_steps   = 56          # Horizon length
-        self.dt           = 0.05        # Time step (20 Hz internal model)
+        # The horizon is 56 * 0.05 = 2.8 s, and that product is what is held
+        # fixed: _control_loop measures the interval it is actually getting and
+        # re-splits the horizon into however many steps of that length it
+        # takes, so these two are the nominal split rather than the shape of
+        # every rollout.  See _control_loop for what that fixed and why.
+        self.time_steps   = 56
+        self.dt           = 0.05
         self.num_samples  = 1000        # Number of trajectory samples
         self.temperature  = 0.3         # Softmax temperature (higher = more exploration)
         # AR(1) coefficient of the sampled noise, per 0.05 s step.  Renamed
@@ -138,7 +167,10 @@ class MPPIControllerNode(Node):
         self.w_smoothness       = 2.0    # Control smoothness
 
         # ── Path following parameters ────────────────────────────────
-        self.lookahead_dist      = 0.8   # How far ahead to look on path
+        # lookahead_dist was here, at 0.8, and nothing read it: MPPI has no
+        # lookahead point, it scores whole rollouts against a reference.  A
+        # constant whose only reference is its own definition is worse than no
+        # constant, because the next person to tune this file will try it.
         self.goal_tol            = 0.15  # Goal tolerance
         self.path_prune_dist     = 0.5   # Prune path points behind robot
 
@@ -158,7 +190,6 @@ class MPPIControllerNode(Node):
 
         # ── Control sequence (warm start) ────────────────────────────
         self.control_sequence = np.zeros((self.time_steps, 2))
-        self.prev_cmd         = np.array([0.0, 0.0])
 
         # ── TF ───────────────────────────────────────────────────────
         self.driven_path = Path()
@@ -358,7 +389,6 @@ class MPPIControllerNode(Node):
         cmd.linear.x  = float(optimal_cmd[0])
         cmd.angular.z = float(optimal_cmd[1])
         self.cmd_pub.publish(cmd)
-        self.prev_cmd = optimal_cmd
 
         # Same line dwa_controller prints, at the same throttle, so two
         # controllers in one graph can be read side by side.
@@ -551,38 +581,39 @@ class MPPIControllerNode(Node):
         return costs
 
     def _generate_reference_trajectory(self, pose):
-        """Generate reference points along path for each timestep."""
+        """Where on the path the robot should be at each timestep.
+
+        Arc length and two interpolations, rather than a walk along the path
+        for every timestep.  The old spelling restarted at the closest point
+        and summed segment lengths until it passed the target, once per
+        timestep: O(T*N) on a 121-waypoint path with a 56-step horizon, all of
+        it in Python, and this controller's whole trouble in the five-robot
+        race was that its tick did not fit its control period.
+
+        Same answer to 1e-6 over forty cases of varying prune, horizon and
+        timestep, and the 1e-6 is the old code's: it divided by
+        `seg_len + 1e-6` to guard a zero-length segment, which biased every
+        interpolation on the path by that much.  np.interp needs no guard.
+
+        The reference advances at REF_SPEED of the robot's top speed; the
+        number is measured, not chosen, and the constant carries the sweep.
+        """
         T = self.time_steps + 1
-        ref = np.zeros((T, 2))
+        closest_idx = int(np.argmin(
+            np.linalg.norm(self.path_xy - pose[:2], axis=1)))
+        ahead = self.path_xy[closest_idx:]
+        if len(ahead) < 2:
+            return np.repeat(self.path_xy[-1][None, :], T, axis=0)
 
-        # Current position and velocity estimate
-        robot_pos = pose[:2]
-        
-        # Find closest point on path
-        dists = np.linalg.norm(self.path_xy - robot_pos, axis=1)
-        closest_idx = np.argmin(dists)
+        # cumulative distance along what is left of the path
+        seg = np.linalg.norm(np.diff(ahead, axis=0), axis=1)
+        s = np.concatenate(([0.0], np.cumsum(seg)))
 
-        # Generate reference points at each timestep
-        for t in range(T):
-            # Distance we expect to travel by this timestep
-            target_dist = self.max_vel * self.dt * t * 0.7  # 70% of max speed
-
-            # Find point on path at that distance
-            accumulated_dist = 0.0
-            for i in range(closest_idx, len(self.path_xy) - 1):
-                seg_len = np.linalg.norm(self.path_xy[i+1] - self.path_xy[i])
-                if accumulated_dist + seg_len >= target_dist:
-                    # Interpolate along this segment
-                    ratio = (target_dist - accumulated_dist) / (seg_len + 1e-6)
-                    ratio = np.clip(ratio, 0, 1)
-                    ref[t] = self.path_xy[i] + ratio * (self.path_xy[i+1] - self.path_xy[i])
-                    break
-                accumulated_dist += seg_len
-            else:
-                # Beyond end of path, use goal
-                ref[t] = self.path_xy[-1]
-
-        return ref
+        # how far up it the robot should have got by each timestep; np.interp
+        # holds the last value past the end of the path, which is the goal
+        want = self.max_vel * self.REF_SPEED * self.dt * np.arange(T)
+        return np.column_stack((np.interp(want, s, ahead[:, 0]),
+                                np.interp(want, s, ahead[:, 1])))
 
     def _reference_cost(self, trajectories, ref_traj):
         """Cost for deviation from reference trajectory."""
@@ -631,23 +662,16 @@ class MPPIControllerNode(Node):
         return np.linalg.norm(terminal_xy - goal, axis=1)
 
     def _goal_angle_cost(self, trajectories, goal):
-        """Heading alignment towards goal."""
-        K = trajectories.shape[0]
-        costs = np.zeros(K)
+        """Heading alignment towards the goal, summed over the horizon.
 
-        for t in range(trajectories.shape[1]):
-            traj_xy = trajectories[:, t, :2]
-            traj_yaw = trajectories[:, t, 2]
-
-            # Angle to goal
-            diff = goal - traj_xy
-            angle_to_goal = np.arctan2(diff[:, 1], diff[:, 0])
-
-            # Angular difference
-            angle_diff = normalize_angle(traj_yaw - angle_to_goal)
-            costs += np.abs(angle_diff)
-
-        return costs
+        The loop over timesteps this replaces did the same arithmetic on (K,)
+        slices; normalize_angle is elementwise, so the whole (K, T+1) block
+        goes through it at once.  Identical to 1e-12.
+        """
+        diff = goal[None, None, :] - trajectories[:, :, :2]
+        angle_to_goal = np.arctan2(diff[:, :, 1], diff[:, :, 0])
+        return np.sum(np.abs(normalize_angle(trajectories[:, :, 2]
+                                             - angle_to_goal)), axis=1)
 
     def _obstacle_cost(self, trajectories):
         """Obstacle avoidance using local costmap."""

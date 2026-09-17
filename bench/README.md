@@ -7,6 +7,7 @@ to pass, and timing comparisons against published baselines.
 python3 bench/test_planners.py     # correctness, ~8 min
 python3 bench/test_dwa_window.py   # DWA's velocity window and stuck detector
 python3 bench/test_chicane.py      # all five controllers down the race reference path
+python3 bench/test_views.py        # every RViz display shows a topic something publishes
 python3 bench/dwa_compare.py       # vs PythonRobotics DWA
 python3 bench/nav2_compare.py      # vs Nav2 Smac Planner paper
 ./bench/run.sh                     # Python vs C++ latency
@@ -215,6 +216,7 @@ the accel-limited window the controller actually evaluates, down to 4× at
 | `test_planners.py` | The correctness suite |
 | `test_dwa_window.py` | DWA's reachable window, orbit detection, closed loop |
 | `test_chicane.py` | The five-robot race's reference path, driven before the simulator sees it |
+| `test_views.py` | Every RViz display against the package's own publishers |
 | `chase_mppi.py` | The site's chase plate: both MPPI weightings, and the goal snap |
 | `dwa_compare.py` | vs PythonRobotics |
 | `nav2_maps.py`, `nav2_compare.py` | vs the Nav2 Smac Planner paper |

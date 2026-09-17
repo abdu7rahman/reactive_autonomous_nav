@@ -161,7 +161,7 @@ class HybridRRTSMACPlannerNode(Node):
         # ── Pubs ─────────────────────────────────────────────────────
         self.path_pub      = self.create_publisher(Path,        '/plan',           10)
         self.status_pub    = self.create_publisher(String,      '/hybrid_status',  10)
-        self.marker_pub    = self.create_publisher(MarkerArray, '/hybrid_tree',    10)
+        self.tree_pub      = self.create_publisher(MarkerArray, '/hybrid_tree',    10)
 
         # ── Timer ────────────────────────────────────────────────────
         self.create_timer(0.5, self._check_and_replan)
@@ -447,6 +447,8 @@ class HybridRRTSMACPlannerNode(Node):
                         f'rejections={rejections}')
                     break
 
+        self._publish_tree(nodes)
+
         if goal_node is None:
             self.get_logger().warn(f'Failed after {MAX_ITER} iterations')
             return None
@@ -463,6 +465,31 @@ class HybridRRTSMACPlannerNode(Node):
         path = self._smooth_path_dual_check(path)
 
         return path
+
+    def _publish_tree(self, nodes):
+        """The search tree, as the arcs it was actually grown from.
+
+        /hybrid_tree was advertised here and never written to, and both RViz
+        configs displayed it, so the recorded clip of the one planner whose
+        character is a kinematic tree showed an empty scene beside its path.
+        Drawn as a line list of parent-to-child segments, the same way
+        rrt_planner draws its own, in this planner's own colour so the two
+        clips can be told apart.
+        """
+        ma = MarkerArray()
+        m = Marker()
+        m.header.frame_id = self.map_frame
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.ns, m.id = 'hybrid_tree', 0
+        m.type, m.action = Marker.LINE_LIST, Marker.ADD
+        m.scale.x = 0.02
+        m.color = ColorRGBA(r=0.35, g=0.65, b=1.0, a=0.4)
+        for n in nodes:
+            if n.parent is not None:
+                m.points.append(Point(x=n.parent.x, y=n.parent.y, z=0.05))
+                m.points.append(Point(x=n.x, y=n.y, z=0.05))
+        ma.markers.append(m)
+        self.tree_pub.publish(ma)
 
     def _smooth_path_dual_check(self, path, iterations=15):
         """
