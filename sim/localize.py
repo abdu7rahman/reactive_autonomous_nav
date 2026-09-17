@@ -46,7 +46,14 @@ class Localize(Node):
         self.create_subscription(Odometry, "/sim_ground_truth_pose", self.on_truth,
                                  qos_profile_sensor_data)
         self.create_subscription(Odometry, "/odom", self.on_odom, 10)
-        self.create_timer(0.05, self.tick)
+        # No timer.  A 20 Hz timer on sim time is about 2.6 Hz of wall clock at
+        # this world's real-time factor, and a Python node starved by RViz
+        # loading meshes on the same four cores publishes well below even that.
+        # The global costmap's activation gives up on base_link->map after a
+        # short window and nav2's lifecycle manager then aborts the whole
+        # bringup permanently rather than retrying -- one clip was lost to that
+        # twice.  Publishing from the odom callback ties the correction to the
+        # diff drive's own 62 Hz and keeps the stamps aligned with it.
 
     def on_truth(self, m: Odometry) -> None:
         p = m.pose.pose.position
@@ -55,6 +62,7 @@ class Localize(Node):
     def on_odom(self, m: Odometry) -> None:
         p = m.pose.pose.position
         self.odom = (p.x, p.y, yaw_of(m.pose.pose.orientation))
+        self.tick()
 
     def tick(self) -> None:
         if self.truth is None or self.odom is None:

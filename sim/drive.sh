@@ -34,16 +34,6 @@ echo "=== $TAG : planner=$PLANNER controller=$CONTROLLER"
 bash $G/clean.sh
 bash $G/reset.sh > /dev/null 2>&1
 
-# Wait for the transform chain to settle before launching anything that needs
-# it.  The teleport above interrupts odom->base_link for a moment, and the
-# local costmap's activation has a bounded wait for exactly that transform: if
-# it misses, the lifecycle manager never gets past local_costmap, global_costmap
-# never activates, and the planner logs "Cannot plan: global_data is None" for
-# the whole run.  That cost one clip before this gate existed.
-if ! timeout 140 python3 $G/wait_tf.py 120 5; then
-  echo "    tf chain never settled -- aborting $TAG"
-  exit 1
-fi
 
 # RViz first, and given time to finish loading.  Started alongside the nav
 # stack it competes for the same four cores while it compiles shaders and loads
@@ -53,6 +43,16 @@ fi
 # "Cannot plan: global_data is None" for the whole run.
 start "$JOB/rviz.pid" rviz2 -d $G/nav.rviz --ros-args -p use_sim_time:=true
 sleep 35
+
+# Gate on tf here, with RViz already up, rather than before it.  The costmaps
+# have a bounded wait for base_link->map at activation and nav2's lifecycle
+# manager aborts the whole bringup permanently when that wait expires -- it
+# does not retry.  Checked before RViz loads, the chain looks fine and then is
+# not; this measures the moment that actually matters.
+if ! timeout 140 python3 $G/wait_tf.py 120 5; then
+  echo "    tf chain never settled -- aborting $TAG"
+  exit 1
+fi
 
 start "$JOB/nav.pid" ros2 launch reactive_autonomous_nav nav_launch.py \
       planner:="$PLANNER" controller:="$CONTROLLER" use_sim_time:=true
