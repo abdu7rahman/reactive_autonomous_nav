@@ -67,6 +67,22 @@ class MPPIControllerNode(Node):
     odom_frame = 'odom'
     base_frame = 'base_link'
 
+    # The interval this loop is actually achieving, in seconds, and the wall
+    # clock of the last tick.  Class-level for the same reason as the frames:
+    # bench/rig.py builds these nodes with object.__new__ and never runs
+    # __init__.  nominal_dt is filled in from self.dt the first time the loop
+    # runs, so it records what the controller was configured for after
+    # measurement has replaced it.
+    _last_tick = 0.0
+    nominal_dt = 0.0
+    horizon_s = 0.0
+
+    # The fewest steps the horizon may be cut into.  It bounds how far dt is
+    # allowed to grow: at 12 steps over a 2.8 s horizon each step is 0.23 s and
+    # 0.12 m of travel, which is still finer than the 0.30 m inflation band the
+    # rollouts are scored against, so a wall cannot fall between two steps.
+    MIN_STEPS = 12
+
     def __init__(self):
         super().__init__('mppi_controller_node')
         self.map_frame  = self.declare_parameter('map_frame',  'map').value
@@ -238,6 +254,56 @@ class MPPIControllerNode(Node):
         if self.current_path is None or self.goal_reached:
             return
 
+        # The model's timestep is the interval this loop is getting, not the
+        # one it asked for.  Measured in the five-robot chicane: the timer is
+        # 50 ms and the optimisation alone took 53 ms at best, 70 at the
+        # median and 113 at the worst, so every single tick overran and the
+        # loop ran at about 14 Hz while every rollout, every acceleration
+        # clamp and the warm-start shift assumed 20.  A command planned to be
+        # replaced after 50 ms was held for 70, which is 40% more turn than
+        # was planned, and MPPI rotated 77 degrees off a course it was meant
+        # to follow at 54 and wedged against a wall -- twice, at 0.51 m and
+        # 0.52 m of 5.80, while the other four finished.  Run alone the same
+        # controller reached its goal, with a median tick of 54 ms.
+        #
+        # This is why bench/test_chicane.py cannot see the fault and passes
+        # MPPI at 0.12 m of deviation: rig.drive steps exactly one dt per
+        # tick, so there the model's dt is the real interval by construction.
+        # Three hypotheses were tested there first and all three measured
+        # clean -- a plant that cannot deliver the commanded speed (caps of
+        # 0.30, 0.20 and 0.15 m/s gave 0.130, 0.102 and 0.113 m), a costmap
+        # that knows only what the lidar has swept (45% unknown: 0.126 m), and
+        # a neighbour 1.7 m to one side (0.121 m).
+        #
+        # Bounded to [nominal, 2.5x nominal]: below the nominal because a tick
+        # that arrives early is the timer catching up rather than a faster
+        # machine, and above because one descheduled tick should not stretch
+        # the horizon into a different controller.
+        # The horizon is the physical quantity and stays fixed; dt and the
+        # number of steps are an implementation split of it. So a longer
+        # interval is spent in fewer, longer steps rather than in a longer
+        # horizon -- which also makes this self-correcting, because the
+        # rollout cost falls with the step count and the loop gets closer to
+        # meeting its period. Holding the step count instead was measured
+        # first: MPPI got 2.11 m up the chicane rather than 0.51, and its dt
+        # sat pinned at the 2.5x bound on 87 of 90 ticks with a 2.8 s horizon
+        # stretched to 7.
+        now = time.perf_counter()
+        if not self.nominal_dt:
+            self.nominal_dt = self.dt
+            self.horizon_s = self.dt * self.time_steps
+        if self._last_tick:
+            self.dt = min(max(now - self._last_tick, self.nominal_dt),
+                          self.horizon_s / self.MIN_STEPS)
+            steps = max(self.MIN_STEPS, int(round(self.horizon_s / self.dt)))
+            if steps != self.time_steps:
+                seq = np.zeros((steps, 2))
+                keep = min(steps, len(self.control_sequence))
+                seq[:keep] = self.control_sequence[:keep]
+                self.control_sequence = seq
+                self.time_steps = steps
+        self._last_tick = now
+
         # Two of the ways out of this loop used to be silent, and a controller
         # that stops without saying so cannot be diagnosed at all: in a
         # five-robot race this one stopped dead at 3.44 m of a 6 m straight,
@@ -300,7 +366,8 @@ class MPPIControllerNode(Node):
             f'v={cmd.linear.x:.2f} ω={cmd.angular.z:.2f} '
             f'at=({pose[0]:.2f},{pose[1]:.2f}) yaw={pose[2]:.2f} '
             f'wps={len(self.path_xy)} dist={dist_to_goal:.2f}m '
-            f'opt={1e3 * (time.perf_counter() - t_opt):.0f}ms',
+            f'opt={1e3 * (time.perf_counter() - t_opt):.0f}ms '
+            f'dt={1e3 * self.dt:.0f}ms',
             throttle_duration_sec=1.0)
 
     def _prune_path(self, pose):

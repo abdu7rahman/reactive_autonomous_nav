@@ -315,8 +315,15 @@ def prepare(node):
 
 
 def drive(node, grid, path_pts, start_pose, dt=0.1, max_steps=1500,
-          goal_tol=0.25, cmd_attr="cmd_pub"):
+          goal_tol=0.25, cmd_attr="cmd_pub", plant_vmax=None):
     """Closed-loop rollout: the controller's own _control_loop, unicycle plant.
+
+    plant_vmax caps what the plant actually delivers, and feeds the delivered
+    velocity back as odometry rather than the commanded one. A perfect plant is
+    not the case a controller fails in: on four cores with five robots the
+    warehouse delivers a fraction of what is asked, and a controller whose
+    reference advances at its own configured maximum rather than at what it is
+    getting drifts further behind the faster it is asked to go.
 
     Returns a dict with reached / collided / steps / path length / min clearance.
     """
@@ -373,6 +380,8 @@ def drive(node, grid, path_pts, start_pose, dt=0.1, max_steps=1500,
             w = float(getattr(m.angular, "z", 0.0))
         # close the odometry loop: a node that sizes its window off the
         # measured velocity has to be told what the plant actually did
+        if plant_vmax is not None:
+            v = max(-plant_vmax, min(plant_vmax, v))
         if isinstance(getattr(node, "current_vel", None), dict):
             node.current_vel = {"v": v, "omega": w}
         vmax = max(vmax, abs(v))

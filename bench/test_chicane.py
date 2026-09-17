@@ -131,6 +131,38 @@ def chicane_grid():
     return rig.Grid(g, resolution=COSTMAP_RES, origin=origin)
 
 
+def as_seen_from(grid, pose):
+    """The same costmap with everything the lidar cannot see marked unknown.
+
+    A nav2 local costmap is not a map: it is a rolling window holding what this
+    robot's own lidar has swept, and at the moment a race starts most of it is
+    still -1.  The grid above is the opposite -- every cell known, every wall
+    inflated -- which is why it scored all five controllers as sound while the
+    simulator wedged one of them twice in the same 0.01 m.
+
+    Unknown here is the shadow behind a wall as seen from `pose`: the cells a
+    ray from the robot reaches only by passing through a wall first.  Applied
+    after inflation, because the inflation band around a wall is knowledge the
+    costmap has and would otherwise overwrite the marking.
+    """
+    data = grid.data.copy()
+    px, py = pose
+    for r in range(grid.h):
+        for c in range(grid.w):
+            x, y = grid.g2w(r, c)
+            if data[r, c] >= LETHAL:
+                continue
+            n = max(2, int(math.hypot(x - px, y - py) / (COSTMAP_RES / 2)))
+            for k in range(1, n):
+                t = k / n
+                sx, sy = px + t * (x - px), py + t * (y - py)
+                if any(abs(sx - wx) <= GATE_W / 2 and abs(sy - wy) <= GATE_T / 2
+                       for wx, wy in relative_walls()):
+                    data[r, c] = -1
+                    break
+    return rig.Grid(data, resolution=COSTMAP_RES, origin=grid.origin)
+
+
 def cross_track(pts, x, y):
     """Distance from (x, y) to the reference polyline."""
     best = float('inf')
@@ -142,12 +174,16 @@ def cross_track(pts, x, y):
     return best
 
 
-def run(module, grid, pts):
+def run(module, grid, pts, seen=None):
+    """Drive one controller.  `seen` is what it is allowed to know, if that is
+    less than the world it is driving in -- the plant still collides against
+    the full grid, because a wall the robot has not seen is still a wall."""
     node = object.__new__(rig.node_class(rig.load(module)))
     rig.apply_defaults(node, module)
     rig.prepare(node)
-    node.costmap_data, node.costmap_info = grid.data, grid.info()
-    node.costmap_origin = grid.origin
+    known = seen or grid
+    node.costmap_data, node.costmap_info = known.data, known.info()
+    node.costmap_origin = known.origin
     node.current_vel = {'v': 0.0, 'omega': 0.0}
     plan_m = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))
     r = rig.drive(node, grid, pts, (pts[0][0], pts[0][1], math.pi / 2),
@@ -211,6 +247,34 @@ def main():
               f"{r['steps'] * 0.1:>6.0f}{r['length']:>8.2f}"
               f"{r['length'] / r['plan_m']:>7.3f}{r['dev']:>9.3f}{r['gap']:>9.3f}"
               f"   {note}")
+
+    # And again on a costmap that knows only what the lidar has swept, which
+    # is the condition the race actually starts in and the one that wedged
+    # MPPI twice.  Same path, same walls, same plant; the only difference is
+    # how much of it the controller has been told about.
+    seen = as_seen_from(grid, (pts[0][0], pts[0][1]))
+    unknown = int((seen.data < 0).sum())
+    print(f"\nAS SEEN FROM THE START -- {unknown} of {seen.data.size} cells "
+          f"({100.0 * unknown / seen.data.size:.0f}%) still unknown, the rest "
+          f"swept")
+    print(f"  {'controller':<14}{'ok':<6}{'sec':>6}{'max dev':>9}{'min gap':>9}"
+          f"   note")
+    for module in ('pure_pursuit_controller', 'stanley_controller',
+                   'dwa_controller', 'teb_controller', 'mppi_controller'):
+        try:
+            r = run(module, grid, pts, seen=seen)
+        except Exception as e:                                       # noqa: BLE001
+            print(f"  {module.replace('_controller', ''):<14}{'FAIL':<6}"
+                  f"{'':>24}   {type(e).__name__}: {e}")
+            fails += 1
+            continue
+        ok = r['reached'] and not r['collided']
+        note = ('footprint in a wall' if r['collided'] else
+                '' if r['reached'] else f"stalled {r['dist_to_goal']:.2f} m out")
+        fails += not ok
+        print(f"  {module.replace('_controller', ''):<14}"
+              f"{'PASS' if ok else 'FAIL':<6}{r['steps'] * 0.1:>6.0f}"
+              f"{r['dev']:>9.3f}{r['gap']:>9.3f}   {note}")
 
     print(f"\n{'all checks passed' if not fails else str(fails) + ' FAILURES'}")
     return 1 if fails else 0

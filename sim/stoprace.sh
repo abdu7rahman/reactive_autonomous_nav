@@ -19,7 +19,12 @@ mine() {
 }
 SAFE=" $(mine | tr '\n' ' ') "
 
-PAT="race.sh"
+# Anchored, not a substring.  `race.sh` matched every process whose argv
+# merely contained those characters, and a wrapper script called rerace.sh was
+# enough: this killed the shell that had just launched it, reported only as
+# exit code 144.  A slash or a space before it and a space or the end after it
+# is the difference between the script and a name that ends in it.
+PAT='(^|[ /])race\.sh( |$)'
 for p in $(pgrep -f -- "$PAT" 2>/dev/null); do
   case "$SAFE" in *" $p "*) continue;; esac
   kill -TERM "$p" 2>/dev/null

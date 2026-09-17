@@ -1,11 +1,12 @@
 # Running the stack in Gazebo
 
-Eleven recordings of this package driving TurtleBot 4s through the warehouse
+Twelve recordings of this package driving TurtleBot 4s through the warehouse
 world: five global planners against one controller, five local controllers
-against one planner, and then all five controllers at once, on five robots, in
-a race up the same six-metre straight. Every clip is one run of `nav_launch.py`
-or `race_launch.py` with nothing stubbed — the same nodes, the same costmaps,
-the same `/goal_pose` in and `/cmd_vel_unstamped` out as on hardware.
+against one planner, and then all five controllers at once, on five robots,
+twice — up a clear six-metre straight, and through a chicane every one of them
+is handed the same path through. Every clip is one run of `nav_launch.py` or
+`race_launch.py` with nothing stubbed — the same nodes, the same costmaps, the
+same `/goal_pose` in and `/cmd_vel_unstamped` out as on hardware.
 
 ROS 2 Jazzy, Gazebo Harmonic 8.15.0, `turtlebot4_gz_bringup`'s warehouse world,
 TurtleBot 4 standard. Rendering is software (llvmpipe), which is why the world
@@ -26,46 +27,75 @@ resets the robot to the warehouse origin each time.
 
 ## The runs
 
-Nine runs, one per configuration, all reaching (2.0, -3.2) from the world
-origin. astar with dwa is recorded once and shown in both halves.
+Nine runs, one per configuration, all reaching (2.6, -3.2) from the world
+origin. astar with dwa is recorded once and shown in both halves, because two
+runs of the same pair would differ only by simulator noise and inviting a
+comparison between them would be inviting a reader to read noise as a result.
 
-| clip | arrival, seconds into its capture |
-|---|---|
-| planner-astar (= controller-dwa) | 123.1 |
-| planner-theta_star | 132.4 |
-| planner-smac | 124.5 |
-| planner-rrt | 168.0 |
-| planner-rrt_smac_hybrid | 213.3 |
-| controller-pure_pursuit | 119.3 |
-| controller-stanley | 134.9 |
-| controller-teb | 124.6 |
-| controller-mppi | 160.2 |
+The table is printed by `sim/clip_table.py`, from the batch log and the files
+on disk, rather than typed from the terminal. The first version of it was
+typed, and was wrong within a day: the clips were re-recorded and the arrivals
+moved by as much as forty seconds with nothing in the document knowing.
 
-These are wall seconds of capture, not a comparison between controllers: the
-world runs at a real-time factor near 0.13 and what else is on the four cores
-varies between runs, so the same configuration would not repeat these to better
-than a few seconds. They are here to say the runs finished, and where each clip
-was cut.
+| clip | arrived | playback | size |
+|---|---|---|---|
+| planner-astar | 18.1 s | 7.5x | 1.33 MB |
+| planner-theta_star | 56.5 s | 7.9x | 4.75 MB |
+| planner-smac | 15.9 s | 7.1x | 1.07 MB |
+| planner-rrt | 30.5 s | 11.5x | 2.22 MB |
+| planner-rrt_smac_hybrid | 26.3 s | 7.1x | 1.74 MB |
+| controller-dwa | 18.1 s | 7.5x | 1.33 MB |
+| controller-pure_pursuit | 16.3 s | 11.5x | 0.96 MB |
+| controller-stanley | 24.7 s | 10.7x | 1.50 MB |
+| controller-teb | 16.3 s | 6.6x | 0.96 MB |
+| controller-mppi | 18.8 s | 7.0x | 1.14 MB |
 
-The green trail behind the robot appears in the DWA clips and not the other
-four: at the time these ten were recorded dwa_controller was the only one
-publishing /driven_path. All five do now -- the five-robot race is five
-coloured trails -- but these clips predate that and have not been re-recorded.
+Simulated seconds from the goal going out to the controller reporting arrival,
+which is the one quantity here that compares between runs -- the playback
+factor is what the machine was doing at the time, and it varies by a factor of
+two between the quickest and slowest capture of the same six cores. The clips
+play at their own factor, so what you watch is the robot at the speed it
+actually moved.
+
+These are not a ranking. Each run is one run; the same configuration repeats to
+a second or two at best, the goal is the same for all nine, and a planner that
+took eight seconds longer to search is carrying that in its number as much as
+its controller's driving.
+
+All ten were re-recorded together, which is why every clip now shows the line
+the robot actually drove: at the time of the first set `dwa_controller` was the
+only one publishing `/driven_path`, so the trail appeared in half the clips and
+not the other half for a reason that had nothing to do with the controllers.
+The set costs 17 MB against the 5.3 MB it replaced, almost all of it in the two
+long runs -- theta_star orbits a shelf corner three times before it recovers,
+and rrt takes the long way round -- and the clips are trimmed to their own
+arrivals rather than to the capture window, so none of it is a robot parked at
+the goal.
 
 ## The five-robot race
 
-Five TurtleBot 4s on a start line, one global planner each, a different local
-controller each, and the same goal six metres directly ahead of every one of
-them.
+Five TurtleBot 4s on a start line, a different local controller in each lane,
+and the same distance to cover. There are two courses, chosen by
+`RACE_COURSE`, and they ask different questions.
 
 ```bash
-bash sim/race_up.sh      # warehouse, five robots, clock, odom pins
-bash sim/race.sh 600     # costmaps, planners, controllers, RViz, capture
+RACE_COURSE=straight race_up.sh && RACE_COURSE=straight race.sh 600
+RACE_COURSE=chicane  race_up.sh && RACE_COURSE=chicane  race.sh 600
 ```
 
 `race_up.sh` is a one-off per race. Odometry starts where a robot was spawned
 and nothing in this stack can put it back, so a second race needs a fresh
-bringup; `race.sh` refuses to start otherwise and says so.
+bringup; `race.sh` refuses to start otherwise and says so. The course is
+defined once, in `reactive_autonomous_nav/race_course.py`, and read by the
+launch file and by every script here -- the lanes were declared twice at one
+point and the copies drifted, which put a robot two metres from where the rest
+of the stack believed it was.
+
+### The straight: five nav stacks
+
+Every robot gets its own A*, its own pair of costmaps and a goal six metres
+directly ahead, so what is being compared is a whole stack rather than a
+tracker.
 
 ![the five-robot race](gif/race.gif)
 
@@ -83,6 +113,163 @@ repeatable to a tenth of a second over six races -- 13.2-13.3, 14.9-15.0,
 are the same distance away, and nothing in the run is random. MPPI's 18.6 s is
 one race, the first in which it finished at all; the five before it are in the
 MPPI section below, along with what was wrong.
+
+DWA's 13.2 s predates the velocity-window repair below, which raised its
+angular acceleration limit to the plant's own. On a clear straight that fix
+changes almost nothing -- there is nothing to steer around -- but the number
+has not been re-measured since, and it is the one figure in this document that
+belongs to an older build of the controller.
+
+### The chicane: five trackers, one path
+
+Three walls per lane, alternating sides, and **one reference path handed to all
+five controllers**. That second part is the point. Five A* runs on five rolling
+costmaps are five different curves -- each robot sees a different slice of the
+walls through its own lidar and replans on its own schedule -- so a chicane
+raced that way compares the planners' luck as much as the controllers'
+tracking. On a gated course the planners are not launched at all and
+`race_timer.py` publishes the same path, translated to each lane, to all five
+controllers in the same instant.
+
+![the chicane race](gif/race-chicane.gif)
+
+| lane | controller | finished |
+|---|---|---|
+| r1 | dwa | 14.0 s |
+| r4 | teb | 16.7 s |
+| r2 | pure_pursuit | 18.9 s |
+| r3 | stanley | 21.2 s |
+| r5 | mppi | 24.8 s |
+
+Simulated seconds from the release. The first four reproduce across five races
+to a tenth of a second -- 13.9-14.0, 16.7-16.8, 18.9-19.0, 21.1-21.2 -- which
+they should, because every robot is handed the same path and nothing in the run
+is random. The order is the straight's order, but the gaps are not: first to
+fourth spans 7.2 s here against 4.1 s on the straight, and stanley, which
+tracks the path most tightly of the five, pays the most for it.
+
+Every controller's name is drawn over its own robot in the colour of its own
+trail, because a 560 px clip has no room for a legend and five coloured lines
+without one are five coloured lines. Each label lives in its own robot's
+`base_link` frame, so the name follows the robot and cannot end up beside the
+wrong trail, and the RViz config is generated (`race_rviz.py`) from the same
+module the colours come from: five near-identical display blocks with the
+colours typed five times each is exactly the sort of file that ends up with a
+legend disagreeing with what it labels.
+
+**The course is measured, not drawn.** A lane has to hold the robot plus 0.30 m
+of inflation on each side, so a wall blocking the middle of a 1.7 m lane can be
+at most 0.76 m wide; the walls are 0.60 m. Each wall is offset 0.45 m from its
+lane's centre, and the corridor beside it runs from that wall's edge to the
+edge of the next lane's wall -- 1.10 m, of which the middle 0.50 m carries no
+inflated cost. The path takes the centre of that 0.50 m band, which is 0.40 m
+off the lane centre, and `race_course.gate_corridor()` computes it from the
+wall geometry rather than carrying 0.40 as a constant.
+
+The outermost lanes get a wall each where their missing neighbour would have
+put one. Without those three the middle three robots squeeze through 1.10 m
+while r1 and r5 find one gate apiece with nothing on the far side, which is a
+wider gate -- measured, twelve corridors at 1.10 m and three open. The point of
+translating one chicane across five lanes is that the lane must not be the
+variable, and `race_path.py --check` is what asserts it: it measures how far
+the path could be pushed each way at every gate and fails if any lane's six
+numbers differ from the rest.
+
+### The path was driven before the simulator saw it
+
+`bench/test_chicane.py` builds the lane as a costmap from the course's own wall
+geometry and drives all five controllers down the reference path against the
+same unicycle plant the rest of the bench uses. It takes about ninety seconds
+and it is what chose the path's shape:
+
+| controller | max deviation from the reference | closest approach to a wall |
+|---|---|---|
+| stanley | 0.045 m | 0.521 m |
+| teb | 0.083 m | 0.486 m |
+| pure_pursuit | 0.093 m | 0.507 m |
+| mppi | 0.119 m | 0.462 m |
+| dwa | 0.171 m | 0.420 m |
+
+The reference itself clears the walls by 0.549 m, so a tracker has 0.249 m
+before it is in the inflated band and 0.329 m before its footprint is in a
+wall. Every one of the five stays inside that, and the spread between them --
+stanley holding the line to 45 mm, DWA cutting nearly four times as much -- is
+the difference the clip exists to show.
+
+MPPI is the exception: its 24.8 s is one race, and the four before it are in
+the section below along with what was wrong.
+
+Two shapes were tried and rejected, both because the bench measured them worse.
+Dropping the smoothing's data weight rounds the corner from a 0.25 m radius to
+0.92 m, which sounds better and is not: the rounding eats 0.056 m of the swing,
+so the reference clears by 0.457 m instead of 0.549 m, and the spread between
+best and worst tracker narrows from 0.045-0.171 m to 0.039-0.128 m. A softer
+curve is an easier curve. And removing the straight through each gate, so the
+path is a single apex, costs 0.084 m of clearance for the same reason -- the
+smoothed path never reaches the corridor's centre, peaking at 0.375 m of a
+possible 0.400 -- and brings DWA's closest approach from 0.420 m to 0.361 m.
+Lengthening it past 0.35 m buys a further millimetre of clearance and costs
+0.06 m of DWA's tracking.
+
+### MPPI was planning at 20 Hz and running at 8
+
+This is the second time the clock has been MPPI's problem and they are not the
+same fault: the section further down is about a single tick costing 337 ms,
+which was fixed by not allocating a 1.9 MB temporary fifty-seven times per
+tick. This one is about what the controller believes that tick's interval to
+be.
+
+The first four chicane races ended with MPPI wedged against a wall: it turned
+77 degrees off a course it was meant to follow at 54, crept sideways until its
+footprint was 0.13 m from a wall, and braked there for the rest of the race.
+Twice, at 0.51 m and 0.52 m of 5.80 -- the same centimetre, so a fault rather
+than bad luck.
+
+The bench could not reproduce it. `test_chicane.py` drove the same controller
+down the same path against the same plant and measured 0.12 m of deviation,
+and three hypotheses tested there all came back clean:
+
+| what was tested | MPPI's max deviation |
+|---|---|
+| nothing (the reference case) | 0.127 m |
+| a plant delivering at most 0.30 / 0.20 / 0.15 m/s | 0.130 / 0.102 / 0.113 m |
+| a costmap knowing only what the lidar has swept, 45% unknown | 0.126 m |
+| a neighbouring robot 1.7 m to one side | 0.121 m |
+
+What the bench cannot model is a clock, and that is where the fault was. MPPI's
+timer is 50 ms. In the five-robot race its optimisation alone took 53 ms at
+best, 70 at the median and 113 at the worst, so every single tick overran and
+the loop ran at about 8 Hz -- while every rollout, every acceleration clamp and
+the warm-start shift assumed 20. A command planned to be replaced after 50 ms
+was held for 125, which is two and a half times the turn that was planned. On a
+straight that is invisible, which is why the same controller finished the
+straight race and reached its goal in its own single-robot clip, with a median
+tick of 54 ms and nothing to diverge from.
+
+The fix is that the model's timestep is the interval the loop is achieving, not
+the one it asked for, and that the horizon is the quantity held fixed: 2.8 s,
+split into however many steps that interval implies, rather than always 56.
+Both halves were measured separately.
+
+| | MPPI's progress | median tick |
+|---|---|---|
+| as it was | 0.51 m, 0.52 m of 5.80 | 70 ms |
+| measured dt, 56 steps regardless | 2.11 m | 66 ms |
+| measured dt, 2.8 s horizon | finished, 24.8 s | 19 ms |
+
+Holding the step count is the half-fix: it gets the timestep right and stretches
+the horizon from 2.8 s to 7, and the tick stays too expensive to meet the
+period. Splitting the horizon instead makes the whole thing self-correcting --
+a longer interval means fewer, longer steps, the rollout cost falls with the
+step count, and the loop gets closer to meeting its period -- and the
+optimisation dropped to 19 ms, comfortably inside it. `MIN_STEPS = 12` bounds
+how far that can go: at twelve steps over 2.8 s each step is 0.12 m of travel,
+still finer than the 0.30 m inflation band the rollouts are scored against, so
+a wall cannot fall between two steps.
+
+Nothing here changes what the controller optimises. Williams' weighting, the
+critics and their weights are untouched; what changed is that the model now
+describes the machine it is running on.
 
 **The race is timed against the robots' own odometry, not their logs.** Each
 robot's odom frame is created where it spawned with x along the heading it
@@ -114,8 +301,9 @@ occupied and no unknown cell across the full 6.4 m the five lanes and a robot
 radius need: lanes centred on x = 0 give 8.6 m of it, lanes centred on x = -3
 give 9.4 m. The grid runs from y = -1 to y = 5 on the second, which leaves
 2.8 m of run-off past the finish -- twice MPPI's horizon -- and 0.6 m behind
-the grid. `grid_tf.py` holds those numbers, and `race_up.sh` and
-`race_timer.py` read them from it rather than keeping copies.
+the grid. `race_course.py` holds those numbers now, and the launch file,
+`grid_tf.py`, `race_up.sh`, `race_path.py`, `race_rviz.py` and `race_timer.py`
+all read them from it rather than keeping copies.
 
 It made no difference to MPPI, whose trouble was elsewhere -- see below -- but
 the straight is now the same race for all five, which it was not.
@@ -179,7 +367,7 @@ nodes. Aborting bringup`, no retry -- so one robot losing a service call costs
 the entire race. With five managers and ten costmaps the failure was not a
 timeout waiting for anything, it was `async_send_request failed`, the request
 never leaving the client. Three consecutive bringups were thrown away that way,
-reporting two, then four, then four of five pairs active. `costmap_up.py`
+reporting two, then four, then four of five pairs active. `lifecycle_up.py`
 configures and activates the ten costmaps itself, one at a time and retrying
 each transition, and reports which of the ten are active. The first race after
 that reported 10/10 on the first attempt.
@@ -389,6 +577,7 @@ hoping.
 | `sim_down.sh` | tear all of that down again |
 | `drive.sh` | one clip: clean, reset, launch, record, encode |
 | `all.sh` | the ten clips |
+| `../reactive_autonomous_nav/race_course.py` | the courses themselves: lanes, walls, colours, who is in which lane |
 | `clean.sh` | kill every per-run process, including ones this harness did not start |
 | `reset.sh` | teleport the robot back to the origin, facing the route |
 | `cmd_relay.py` | `/cmd_vel_unstamped` to the diff drive, bypassing the reflex layer |
@@ -408,12 +597,15 @@ hoping.
 | `race.sh` | the race: costmaps, planners, controllers, RViz, capture, encode |
 | `stoprace.sh` | stop a race and everything it started, leaving the world up |
 | `race_robot.py` | the TurtleBot 4 description, stripped to what a race uses |
-| `grid_tf.py` | where the grid is, and the transforms that pin it into `map` |
+| `grid_tf.py` | publishes the course: odom pins, the chicane, the name labels |
 | `race_timer.py` | releases the grid and times it against the robots' odometry |
-| `race.rviz` | all five robots in one view, one colour each |
+| `race_path.py` | the chicane's one reference path, and the check that it is clear |
+| `race_rviz.py` | generates the race view: five robots, one colour and one label each |
+| `send_goal.py` | sends a goal and waits for the plan that proves it arrived |
+| `clip_table.py` | prints the ten-clip table from the batch log and the files |
 | `fastdds_udp.xml` | UDP only, because shared memory ran out of ports |
 
-### Two things this harness is careful about, and why
+### Three things this harness is careful about, and why
 
 **Nothing reads the `ros2` command line for anything that matters.** The CLI
 gives discovery about a second, and on this machine under load with forty-odd
@@ -428,13 +620,33 @@ and printed `map served` either way, and the cost was batches recorded against
 a world whose global costmap had no map in it. `lifecycle_up.py` and
 `clock_now.py` are rclpy nodes with real discovery windows.
 
-**Every gate has to be able to fail.** `sim_up.sh` printed `core topics
-present: 2/4` and then `SIMUP`; `all.sh` had no check at all, so a two-hour
-batch would start against anything; and the first version of that check was
-`if ! sim_ok | tee ...`, which is not a check either, because a pipeline's
-status is its last command's and `tee` always succeeds. Both run `sim_ok` now,
-which reads the clock and waits for `/scan`, `/odom` and `/map` to deliver
-rather than counting entries in a topic list.
+**Every gate has to be able to fail, and it has to be able to pass.**
+`sim_up.sh` printed `core topics present: 2/4` and then `SIMUP`; `all.sh` had
+no check at all, so a two-hour batch would start against anything; and the
+first version of that check was `if ! sim_ok | tee ...`, which is not a check
+either, because a pipeline's status is its last command's and `tee` always
+succeeds. Both run `sim_ok` now, which reads the clock and waits for `/scan`,
+`/odom` and `/map` to deliver rather than counting entries in a topic list.
+The other direction is just as expensive: `race.sh` tested `lifecycle_up.py`'s
+output for `costmaps active: 10/10`, a string it has never printed -- it prints
+`active: 10/10` -- so the condition could not be true however well the bringup
+went, and the next race would have relaunched the whole stack three times and
+aborted with ten live costmaps. Both now use the exit status, which is the same
+question with no number in it to get wrong.
+
+**A message that was sent is not a message that arrived.** `/goal_pose` is not
+latched and a publisher that exits the moment it has written loses the message
+if matching has not finished, so the goal used to go out after a wait for a
+subscriber to appear in the graph. The graph lied in both directions: `ros2
+topic info` reported zero subscribers on runs whose planner demonstrably drove
+to the goal, and rclpy's own `count_subscribers` then reported zero through a
+full 120-second window on five consecutive runs that all worked, and one on the
+single run that did not. That run was a 600-second capture of a stationary
+robot, encoded into a 57 kB gif of one still frame, and copied to a second clip
+name as well. `send_goal.py` counts nothing: it publishes the goal, waits for
+the planner's own `/plan`, and publishes again if none comes. The replacement
+run needed two sends, so the loss is reproducible rather than bad luck, and
+`drive.sh` now aborts before the capture rather than recording nothing.
 
 `clean.sh`, `sim_down.sh` and the stop scripts are more careful about killing
 processes than they look like they need to be. A pattern typed on a command
