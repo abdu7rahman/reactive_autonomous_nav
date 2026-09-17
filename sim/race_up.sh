@@ -1,6 +1,15 @@
 #!/bin/bash
 # Bring up the warehouse with five TurtleBot 4s on a start line.
 #
+#   RACE_COURSE=straight|chicane race_up.sh
+#
+# The course -- where the lanes are, how far apart, and what is standing on
+# them -- is reactive_autonomous_nav/race_course.py.  Nothing here knows: the
+# lanes come out of grid_tf.py --lanes and the walls out of grid_tf.py --gates,
+# and both are read rather than repeated, because a lane value that disagreed
+# with its own odom pin would put a robot somewhere the whole stack believes it
+# is not.
+#
 # Five stock turtlebot4_spawn stacks does not fit on this machine -- see the
 # header of race_robot.py for what the logs said when it was tried.  This
 # brings up the same robot with the parts a controller comparison uses: the
@@ -16,14 +25,20 @@
 # roll with the robot and the only obstacles on the straight are the other four
 # robots, which the lidar sees.
 #
-# Lanes 1.3 m apart.  The robot is 0.34 m across and carries a 0.30 m
-# inflation, so anything tighter starts the race with every robot already
-# inside its neighbour's forbidden zone.
+# Lane spacing is the course's, and it is not a free choice: the robot is
+# 0.34 m across and carries a 0.30 m inflation, so 1.3 m is about the tightest
+# start line that does not put every robot inside its neighbour's forbidden
+# zone, and a course with a wall blocking the middle of each lane needs 1.7 to
+# leave a corridor beside it.
 
 . /opt/rosenv.sh
 G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . $G/lib.sh
 export DISPLAY=:99
+# Exported, not defaulted per process: every python3 below resolves the course
+# from the environment, and five processes each falling back to their own
+# default is five chances to disagree.
+export RACE_COURSE=${RACE_COURSE:-chicane}
 
 # The overlay first: it carries the same description with the OAK-D stripped
 # out, and five depth cameras rendering through llvmpipe is most of the cost of
@@ -31,11 +46,8 @@ export DISPLAY=:99
 export GZ_SIM_RESOURCE_PATH=/root/ros2_ws/tb4_overlay/share:/opt/ros/jazzy/share
 RUN=$G/run; SIM=$RUN/sim; mkdir -p "$SIM" "$RUN/log"
 
-# The grid geometry lives in grid_tf.py, which also publishes the transforms
-# that pin each odom origin into `map`.  Read rather than repeated: a lane
-# value that disagreed with its own odom pin would put a robot somewhere the
-# whole stack believes it is not.
 eval "$(python3 $G/grid_tf.py --lanes)"
+echo "course $COURSE: lanes $LANES, start y=$START_Y, $N_WALLS walls"
 SPAWN_Z=0.01
 
 # One Sensors system for the whole world.  The stock world has it commented out
@@ -72,8 +84,8 @@ sleep 5
 # the warehouse's own shelving is, and the start line sits on open floor.
 # The chicane first, so the walls are in the world before the lidars are.
 # Spawned as static SDF models rather than edited into the world file: the
-# world is turtlebot4_gz_bringup's and this leaves it alone, and grid_tf.py
-# stays the only place the course is described.
+# world is turtlebot4_gz_bringup's and this leaves it alone, and
+# race_course.py stays the only place the course is described.
 gates=0
 while IFS=$'\t' read -r name sdf; do
   [ -z "$name" ] && continue
@@ -83,7 +95,7 @@ while IFS=$'\t' read -r name sdf; do
     gates=$((gates + 1))
   fi
 done < <(python3 $G/grid_tf.py --gates)
-echo "chicane: $gates walls spawned"
+echo "course walls spawned: $gates/$N_WALLS"
 
 for lane in $LANES; do
   ns=${lane%%:*}; x=${lane##*:}
@@ -149,9 +161,12 @@ for lane in $LANES; do
   [ "$n$m" = "11" ] && ok=$((ok + 1))
 done
 echo "robots live: $ok/5"
-if [ "$ok" = "5" ] && [ "$gates" = "15" ]; then
+# $N_WALLS, not a literal: the straight has none and the chicane has eighteen,
+# and the first chicane run passed a gate written for fifteen with three walls
+# missing.
+if [ "$ok" = "5" ] && [ "$gates" = "$N_WALLS" ]; then
   echo RACEUP
 else
-  echo "RACEUP FAILED -- robots $ok/5, chicane walls $gates/15"
+  echo "RACEUP FAILED -- robots $ok/5, course walls $gates/$N_WALLS"
   exit 1
 fi

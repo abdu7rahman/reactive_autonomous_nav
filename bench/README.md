@@ -1,10 +1,12 @@
 # Benchmarks and tests
 
-Two things live here: a correctness suite that every planner and controller has
+Two things live here: correctness suites that every planner and controller has
 to pass, and timing comparisons against published baselines.
 
 ```bash
 python3 bench/test_planners.py     # correctness, ~8 min
+python3 bench/test_dwa_window.py   # DWA's velocity window and stuck detector
+python3 bench/test_chicane.py      # all five controllers down the race reference path
 python3 bench/dwa_compare.py       # vs PythonRobotics DWA
 python3 bench/nav2_compare.py      # vs Nav2 Smac Planner paper
 ./bench/run.sh                     # Python vs C++ latency
@@ -211,6 +213,8 @@ the accel-limited window the controller actually evaluates, down to 4× at
 | `rig.py` | ROS stubs, node loader, path validators, closed-loop driver |
 | `maps.py` | Mazes, room maps, costmap inflation |
 | `test_planners.py` | The correctness suite |
+| `test_dwa_window.py` | DWA's reachable window, orbit detection, closed loop |
+| `test_chicane.py` | The five-robot race's reference path, driven before the simulator sees it |
 | `chase_mppi.py` | The site's chase plate: both MPPI weightings, and the goal snap |
 | `dwa_compare.py` | vs PythonRobotics |
 | `nav2_maps.py`, `nav2_compare.py` | vs the Nav2 Smac Planner paper |

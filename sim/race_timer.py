@@ -2,8 +2,8 @@
 
     race_timer.py <sim_seconds> [--no-start]
 
-Sends all five goals in one process and then measures, in the simulator's own
-clock, when each robot crosses the finish line.  One process rather than five
+Releases all five robots from one process and then measures, in the simulator's
+own clock, when each crosses the finish line.  One process rather than five
 `ros2 topic pub --once` calls because the start has to be simultaneous: a race
 where the grid is released over four seconds of a world running at a real-time
 factor near 0.11 is thirty-six simulated seconds of head start, which is most
@@ -31,6 +31,15 @@ loses the message if the subscriber has not finished matching, so this waits
 for each planner's subscription to appear before it publishes -- a full
 recorded run was once 190 seconds of a robot that had never been told where to
 go.
+
+What gets released depends on the course.  On the straight it is five goals,
+one per robot, and each robot's own A* plans its way there.  On the chicane it
+is five copies of one reference path (race_path.py) straight onto /<ns>/plan,
+because the question there is how each controller tracks the same curve and
+five separate A* runs on five rolling costmaps are five different curves.  The
+planners are not launched at all on the chicane -- see launch/race_launch.py --
+so nothing else is writing to /plan and the reference cannot be overwritten
+halfway up the course.
 """
 from __future__ import annotations
 
@@ -45,19 +54,18 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path
 
-from grid_tf import LANES, START_Y, RACE_LENGTH
+from race_path import path_for
+from reactive_autonomous_nav.race_course import (
+    CONTROLLER, COSTMAP_RES, COURSE, GATES, LANES, RACE_LENGTH, START_Y)
 
-# Which controller is in which lane -- the same assignment as
-# launch/race_launch.py's GRID.  The lane positions and the start line come
-# from grid_tf.py, which is also what pins each odom origin into `map`, so a
-# goal cannot be placed relative to a lane the robot was not spawned in.
-CONTROLLER = {'r1': 'dwa', 'r2': 'pure_pursuit', 'r3': 'stanley',
-              'r4': 'teb', 'r5': 'mppi'}
+# The lane positions, the start line and which controller is in which lane all
+# come from race_course.py, which is also what grid_tf.py pins each odom origin
+# into `map` from and what the launch file builds the stack from, so a goal
+# cannot be placed relative to a lane the robot was not spawned in.
 GRID = [(ns, x, CONTROLLER[ns]) for ns, x in LANES.items()]
 GOAL_TOL = 0.15                     # every controller in this package
-COSTMAP_RES = 0.05                  # config/race_costmap_params.yaml
 FINISH = RACE_LENGTH - GOAL_TOL - COSTMAP_RES
 
 # A robot that has gained less than a centimetre in this many simulated seconds
@@ -70,10 +78,9 @@ MOVED = 0.01
 
 class Timer(Node):
 
-    def __init__(self, start_goals: bool) -> None:
+    def __init__(self) -> None:
         super().__init__('race_timer')
         self.t0: float | None = None
-        self.start_goals = start_goals
         self.progress = {ns: 0.0 for ns, _x, _c in GRID}
         self.moved = {ns: 0.0 for ns, _x, _c in GRID}
         self.finished: dict[str, float] = {}
@@ -81,9 +88,17 @@ class Timer(Node):
             self.create_subscription(
                 Odometry, f'/{ns}/odom',
                 lambda m, ns=ns: self._odom(ns, m), qos_profile_sensor_data)
-        self.goal_pubs = {
-            ns: self.create_publisher(PoseStamped, f'/{ns}/goal_pose', 10)
-            for ns, _x, _c in GRID}
+        # One or the other, never both: on a course with gates the reference
+        # path goes straight to the controllers, on one without it the goal
+        # goes to the planners.
+        if GATES:
+            self.release_pubs = {
+                ns: self.create_publisher(Path, f'/{ns}/plan', 10)
+                for ns, _x, _c in GRID}
+        else:
+            self.release_pubs = {
+                ns: self.create_publisher(PoseStamped, f'/{ns}/goal_pose', 10)
+                for ns, _x, _c in GRID}
 
     @property
     def sim(self) -> float:
@@ -111,32 +126,50 @@ class Timer(Node):
                 f'{ns} crossed at {self.finished[ns]:.1f} s '
                 f'({len(self.finished)}/{len(GRID)})')
 
-    def wait_for_planners(self, secs: float) -> int:
+    def wait_for_listeners(self, secs: float) -> int:
         end = time.time() + secs
         while time.time() < end:
             rclpy.spin_once(self, timeout_sec=0.2)
-            ready = sum(1 for p in self.goal_pubs.values()
+            ready = sum(1 for p in self.release_pubs.values()
                         if p.get_subscription_count() >= 1)
             if ready == len(GRID):
                 return ready
-        return sum(1 for p in self.goal_pubs.values()
+        return sum(1 for p in self.release_pubs.values()
                    if p.get_subscription_count() >= 1)
 
+    def _goal(self, x: float) -> PoseStamped:
+        m = PoseStamped()
+        m.header.frame_id = 'map'
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.pose.position.x = x
+        m.pose.position.y = START_Y + RACE_LENGTH
+        m.pose.orientation.w = 1.0
+        return m
+
+    def _plan(self, ns: str) -> Path:
+        m = Path()
+        m.header.frame_id = 'map'
+        m.header.stamp = self.get_clock().now().to_msg()
+        for x, y in path_for(ns):
+            p = PoseStamped()
+            p.header = m.header
+            p.pose.position.x = x
+            p.pose.position.y = y
+            p.pose.orientation.w = 1.0
+            m.poses.append(p)
+        return m
+
     def release(self) -> None:
-        """Every goal the same distance ahead of the robot that gets it."""
+        """All five at once: the goal, or the reference path."""
         for ns, x, _c in GRID:
-            m = PoseStamped()
-            m.header.frame_id = 'map'
-            m.header.stamp = self.get_clock().now().to_msg()
-            m.pose.position.x = x
-            m.pose.position.y = START_Y + RACE_LENGTH
-            m.pose.orientation.w = 1.0
-            self.goal_pubs[ns].publish(m)
+            self.release_pubs[ns].publish(
+                self._plan(ns) if GATES else self._goal(x))
         self.t0 = self.sim
         self.moved = {ns: self.t0 for ns, _x, _c in GRID}
-        print(f'grid released at sim {self.t0:.1f}s, '
-              f'goals {RACE_LENGTH:.1f} m ahead, finish line {FINISH:.2f} m',
-              flush=True)
+        what = (f'{len(self._plan(GRID[0][0]).poses)}-point reference paths'
+                if GATES else f'goals {RACE_LENGTH:.1f} m ahead')
+        print(f'grid released at sim {self.t0:.1f}s on the {COURSE}: '
+              f'{what}, finish line {FINISH:.2f} m', flush=True)
 
 
 def main() -> int:
@@ -144,7 +177,7 @@ def main() -> int:
     start = '--no-start' not in sys.argv[2:]
 
     rclpy.init()
-    t = Timer(start)
+    t = Timer()
 
     # Clock first: t0 has to be a real simulator reading, not a zero.
     end = time.time() + 60
@@ -156,8 +189,9 @@ def main() -> int:
         return 1
 
     if start:
-        ready = t.wait_for_planners(120)
-        print(f'planners listening on /goal_pose: {ready}/{len(GRID)}', flush=True)
+        ready = t.wait_for_listeners(120)
+        topic = '/plan' if GATES else '/goal_pose'
+        print(f'listening on {topic}: {ready}/{len(GRID)}', flush=True)
         t.release()
     else:
         # --no-start is the start-line check race.sh runs before the nav stack

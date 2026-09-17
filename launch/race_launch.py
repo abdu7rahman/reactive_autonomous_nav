@@ -1,10 +1,26 @@
 print(''.join(chr(x-7) for x in [104,105,107,124,115,39,121,104,111,116,104,117]))
 """Five TurtleBot 4s, five local controllers, one race.
 
-Every robot gets the same global planner and a goal the same distance away, so
-the only thing that differs down the straight is the controller being compared.
+What comes up depends on the course, which is RACE_COURSE in the environment
+and defined in reactive_autonomous_nav/race_course.py.
 
-  ros2 launch reactive_autonomous_nav race_launch.py
+  RACE_COURSE=straight  five costmap pairs, five A* planners, five controllers.
+                        Every robot gets a goal the same distance away and
+                        plans its own way there, so the race is a nav stack
+                        against a nav stack.
+  RACE_COURSE=chicane   the same without the planners.  sim/race_timer.py
+                        publishes one reference path (sim/race_path.py) to all
+                        five controllers at once instead, because on a curve
+                        the thing worth comparing is the tracking, and five A*
+                        runs on five rolling costmaps are five different
+                        curves -- different lidar views, different replans,
+                        different corners cut.  Leaving the planners out is
+                        not only about fairness: A* republishes its plan on a
+                        0.5 s timer whenever the robot drifts 0.8 m off it, so
+                        a planner still running would overwrite the reference
+                        halfway up the course.
+
+  RACE_COURSE=chicane ros2 launch reactive_autonomous_nav race_launch.py
 
 Frames. The five robots share one /tf, which works because every frame carries
 its robot's namespace -- r1/odom, r1/base_link, r3/rplidar_link -- and one
@@ -15,7 +31,7 @@ name their topics absolutely -- '/plan', '/odom' -- and a leading slash is
 immune to a namespace push, so those are remapped explicitly; /tf is not,
 deliberately.
 
-No lifecycle manager either: sim/costmap_up.py configures and activates the
+No lifecycle manager either: sim/lifecycle_up.py configures and activates the
 ten costmaps itself, one at a time and retrying each transition, and its
 header records what nav2_lifecycle_manager did instead -- one lost service
 call on one robot aborting the whole bringup, permanently, on most attempts.
@@ -30,10 +46,11 @@ discovery; it was the wrong diagnosis and did not help.  What was actually
 wrong was /tf_static delivery -- see sim/grid_tf.py -- and it is fixed at the
 source.
 
-sim/race_timer.py sends the goals, one per robot, each the same distance
-directly ahead of the robot that gets it. Equal distances are as fair as a
-grid gets; they are not the same thing as an equal race, because r3 in the
-middle has a neighbour on each side and r1 and r5 on the outside have one.
+Equal distances are as fair as a grid gets; they are not the same thing as an
+equal race, because r3 in the middle has a neighbour on each side and r1 and r5
+on the outside have one.  The chicane's edge walls (race_course.wall_poses)
+close half of that gap -- every lane then has a wall on both sides of every
+gate -- and sim/race_path.py --check is what measures that they do.
 """
 
 from launch import LaunchDescription
@@ -42,17 +59,14 @@ from ament_index_python.packages import get_package_share_directory
 import os
 import tempfile
 
-# Which controller is in which lane. Where the lanes are is not here: that is
-# sim/grid_tf.py, which spawns them, pins their odom origins into `map` and
-# places the goals, and which records how the grid's position was measured
-# against the warehouse's own occupancy map.
-GRID = [
-    ('r1', 'dwa_controller'),
-    ('r2', 'pure_pursuit_controller'),
-    ('r3', 'stanley_controller'),
-    ('r4', 'teb_controller'),
-    ('r5', 'mppi_controller'),
-]
+from reactive_autonomous_nav.race_course import CONTROLLER, COURSE, GATES
+
+# Which controller is in which lane, and where the lanes are, both come from
+# race_course.py -- the same module sim/grid_tf.py spawns the grid from and
+# pins the odom origins from, and which records how the grid's position was
+# measured against the warehouse's own occupancy map.  It was declared twice
+# and the copies were already drifting.
+GRID = [(ns, f'{ctrl}_controller') for ns, ctrl in CONTROLLER.items()]
 
 VIZ = ['/astar_markers', '/astar_explored', '/astar_status', '/replan_request',
        '/driven_path', '/controller_status', '/dwa_trajectories',
@@ -110,11 +124,14 @@ def generate_launch_description():
                 name=which, namespace=f'{ns}/{which}', output='screen',
                 parameters=[cm_cfg, {'use_sim_time': True}]))
 
-        ld.add_action(Node(
-            package='reactive_autonomous_nav', executable='astar_planner',
-            name='astar_planner_node', **common))
+        if not GATES:
+            ld.add_action(Node(
+                package='reactive_autonomous_nav', executable='astar_planner',
+                name='astar_planner_node', **common))
         ld.add_action(Node(
             package='reactive_autonomous_nav', executable=controller,
             name=f'{controller}_node', **common))
 
+    print(f'race_launch: course {COURSE}, {len(GRID)} robots, '
+          f'{"controllers only" if GATES else "planner + controller each"}')
     return ld

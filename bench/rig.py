@@ -351,6 +351,11 @@ def drive(node, grid, path_pts, start_pose, dt=0.1, max_steps=1500,
     collided = False
     steps = 0
     vmax = 0.0
+    # Every pose the plant passed through, not just the last one. A rollout
+    # that ends at the goal can still have left the corridor on the way --
+    # which is the whole question on a chicane -- and the final pose cannot
+    # say so.
+    trace = [(x, y, yaw)]
     for steps in range(1, max_steps + 1):
         pose_now = (x, y, yaw)
         node._get_robot_pose = lambda p=pose_now: p
@@ -376,6 +381,7 @@ def drive(node, grid, path_pts, start_pose, dt=0.1, max_steps=1500,
         yaw = (yaw + w * dt + math.pi) % (2 * math.pi) - math.pi
         travelled += math.hypot(nx - x, ny - y)
         x, y = nx, ny
+        trace.append((x, y, yaw))
         r, c = grid.w2g(x, y)
         if not grid.free(r, c):
             collided = True
@@ -386,7 +392,7 @@ def drive(node, grid, path_pts, start_pose, dt=0.1, max_steps=1500,
 
     return {"reached": bool(node.goal_reached), "collided": collided,
             "steps": steps, "length": travelled, "vmax": vmax,
-            "final": (x, y, yaw),
+            "final": (x, y, yaw), "trace": trace,
             "dist_to_goal": math.hypot(x - gx, y - gy)}
 
 

@@ -1,10 +1,16 @@
 #!/bin/bash
 # Record the five-robot race against the running simulator.
 #
-#   race.sh [wall_seconds]
+#   RACE_COURSE=straight|chicane race.sh [wall_seconds]
+#
+# The course has to be the one race_up.sh spawned -- it decides where the lanes
+# are -- so both read RACE_COURSE from the environment and the output is named
+# after it: gif/race.gif is the straight and gif/race-chicane.gif the chicane.
+# Two artefacts, not one overwritten twice.
 #
 # race_up.sh puts the grid on the start line; this brings up five costmap
-# pairs, five planners and five controllers, opens RViz on the whole grid, and
+# pairs and five controllers -- plus five planners on the straight, where each
+# robot plans its own way to its own goal -- opens RViz on the whole grid, and
 # releases all five at once.
 #
 # The capture window is wall seconds, not simulated ones.  Everything that sets
@@ -17,22 +23,42 @@
 G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . $G/lib.sh
 export DISPLAY=:99
+export RACE_COURSE=${RACE_COURSE:-chicane}
 
 
 WALL=${1:-600}
-TAG=race
+eval "$(python3 $G/grid_tf.py --lanes)"
+TAG=race; [ "$COURSE" != "straight" ] && TAG="race-$COURSE"
 RUN=$G/run; JOB=$RUN/job; mkdir -p "$JOB" "$RUN/log" "$G/gif"
 trap 'stop $JOB/*.pid' EXIT
 
 echo "=== $TAG"
 bash $G/clean.sh
 
+# The reference path before anything else.  On a course with gates it is what
+# all five controllers are handed, and a reference that clipped a wall would
+# not read as a bad path in the clip -- it would read as five robots stopping
+# for no visible reason, because each one's own costmap refuses to follow a
+# path through its inflated band.  Twenty minutes of simulator to find out
+# what this measures in a tenth of a second.
+if ! python3 $G/race_path.py --check > "$JOB/path.log" 2>&1; then
+  sed 's/^/    /' "$JOB/path.log"
+  echo "    the reference path is not clear of the course -- aborting"
+  exit 1
+fi
+sed -n '1,4p' "$JOB/path.log" | sed 's/^/    /'
+
+# RViz config generated from the same course module, so the framing suits the
+# lane spacing and the colours cannot disagree with the labels.
+python3 $G/race_rviz.py > "$RUN/$TAG.rviz" || exit 1
+
 # Gate on the transform chain with the robots settled.  nav2's costmaps wait a
 # bounded time for base_frame->global_frame when they activate and the
 # lifecycle manager turns an expired wait into a permanent abort -- it logs
 # "Failed to bring up all requested nodes" and never retries -- so the planner
 # would spend the whole race on "Cannot plan: global_data is None".
-for ns in r1 r2 r3 r4 r5; do
+for lane in $LANES; do
+  ns=${lane%%:*}
   if ! timeout 90 ros2 run tf2_ros tf2_echo map "$ns/base_link" \
        --ros-args -p use_sim_time:=true 2>/dev/null | grep -q Translation; then
     echo "    no map->$ns/base_link -- aborting"
@@ -85,7 +111,7 @@ fi
 
 # RViz last.  It is the heaviest thing on this machine and the costmaps'
 # activation wait is what it used to walk on.
-start "$JOB/rviz.pid" rviz2 -d $G/race.rviz --ros-args -p use_sim_time:=true
+start "$JOB/rviz.pid" rviz2 -d "$RUN/$TAG.rviz" --ros-args -p use_sim_time:=true
 sleep 45
 
 # Capture opens before the start so the clip begins on a grid at rest.
@@ -107,8 +133,8 @@ sleep $PREROLL
 # crosses or its simulated budget runs out, whichever comes first.  240
 # simulated seconds: the single-robot runs took 119 to 213 seconds of capture
 # at a real-time factor near 0.11, which is 13 to 23 simulated seconds for a
-# 3.8 m diagonal through shelving, so an unobstructed 6 m straight has an order
-# of magnitude of room here.
+# 3.8 m diagonal through shelving, so a 6 m course has an order of magnitude
+# of room here.
 start "$JOB/timer.pid" python3 $G/race_timer.py 240 --ros-args -p use_sim_time:=true
 echo "    grid released; capturing ${WALL}s"
 
@@ -168,7 +194,7 @@ fi
 # viewport, which puts its left and right dock-splitter handles in the frame --
 # a few coloured pixels at each edge of the gif, at the middle height, that
 # look like world geometry and are not.  16 px off each side and 8 off the
-# bottom clears them and costs nothing at the ends of the straight.
+# bottom clears them and costs nothing at the ends of the course.
 ffmpeg -loglevel error -y $TRIM -i "$RUN/$TAG.ts" -vf \
   "crop=880:616:16:0,setpts=PTS/$SPEED,fps=8,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=none" \
   -loop 0 "$G/gif/$TAG.gif" < /dev/null
