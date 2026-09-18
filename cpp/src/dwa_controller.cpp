@@ -136,7 +136,7 @@ public:
 
         sub_costmap_  = create_subscription<nav_msgs::msg::OccupancyGrid>(
             "/local_costmap/costmap", qos_map,
-            [this](nav_msgs::msg::OccupancyGrid::SharedPtr m){ local_map_ = m; });
+            std::bind(&DWAControllerNode::on_costmap, this, std::placeholders::_1));
 
         pub_cmd_      = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel_unstamped", 10);
         pub_traj_     = create_publisher<visualization_msgs::msg::MarkerArray>("/dwa_trajectories", 10);
@@ -169,6 +169,7 @@ private:
     bool                                    has_odom_{false};
     nav_msgs::msg::Path::SharedPtr          global_plan_;
     nav_msgs::msg::OccupancyGrid::SharedPtr local_map_;
+    std::vector<uint8_t> cost_;    // local_map_->data, back on the raw scale
     size_t                                  wp_idx_{0};
     bool                                    goal_reached_{false};
     bool                                    recovery_mode_{false};
@@ -250,6 +251,40 @@ private:
     }
 
     // ── costmap ───────────────────────────────────────────────────────────────
+    // nav2 publishes /<name>/costmap as a nav_msgs/OccupancyGrid -- 0..100,
+    // -1 unknown -- and keeps the raw 0..255 costmap on /<name>/costmap_raw.
+    // Every threshold in this file is on the raw scale, and this read the
+    // OccupancyGrid straight into them: the highest value that can arrive is
+    // 100, LETHAL_COST is 253, so `cost >= LETHAL_COST` was unreachable and
+    // the collision test in the rollout could not fire. Measured on a live
+    // race costmap: 14,400 cells, max 100, 1,135 cells at 99 (inscribed) and
+    // 88 at 100 (lethal), none of which this node would have refused. What
+    // was left was the soft penalty, which for a lethal cell is (100 - 80) /
+    // 173 = 0.116 -- a rollout straight through a wall cost a tenth of a
+    // point a step.
+    //
+    // dwa_controller.py hit the same thing and its _costs_from_grid records
+    // it: "Theta* handing back a two-waypoint plan straight through a wall,
+    // because its line-of-sight check could not see one". The port never got
+    // that fix. Inverting nav2's own forward map here rather than at every
+    // lookup also takes the conversion off the rollout's inner loop.
+    //
+    // Unknown is 255 on the raw scale, which is >= LETHAL_COST; it is mapped
+    // to free instead, because that is what the Python controller does with
+    // it and what this function already does with an out-of-bounds point.
+    void on_costmap(nav_msgs::msg::OccupancyGrid::SharedPtr m)
+    {
+        local_map_ = m;
+        cost_.resize(m->data.size());
+        for (size_t i = 0; i < m->data.size(); i++) {
+            const int8_t g = m->data[i];
+            cost_[i] = g < 0    ? 0
+                     : g == 100 ? 254
+                     : g == 99  ? 253
+                     : (uint8_t)((int)g * 252 / 99);
+        }
+    }
+
     uint8_t costmap_lookup(double wx, double wy) const
     {
         if (!local_map_) return 0;
@@ -261,7 +296,7 @@ private:
         int gx = (int)((wx - info.origin.position.x) * inv);
         int gy = (int)((wy - info.origin.position.y) * inv);
         if (gx < 0 || gy < 0 || gx >= (int)info.width || gy >= (int)info.height) return 0;
-        return static_cast<uint8_t>(local_map_->data[gy * (int)info.width + gx]);
+        return cost_[(size_t)gy * (size_t)info.width + (size_t)gx];
     }
 
     // ── lookahead waypoint ─────────────────────────────────────────────────────
