@@ -96,3 +96,22 @@ void trace_cpprobotics(const TraceIn& in, TraceOut& out) {
     out.ms = trace_median(ms);
     out.rolls = trace_median(rolls);
 }
+
+// How many trajectories its own loop evaluates for a given side, so the
+// "same trajectory count" claim in bench/README.md is checkable rather than
+// asserted: it walks `for (v = dw[0]; v <= dw[1]; v += v_reso)`, which is a
+// different construction from this repo's lattice and need not agree on the
+// count even given the same window and the same resolution.
+int count_cpprobotics(int side) {
+    Config cfg;
+    cfg.dt = 0.1f; cfg.predict_time = 2.5f;
+    cfg.v_reso = (cfg.max_speed - cfg.min_speed) / (side - 1);
+    cfg.yawrate_reso = (2 * cfg.max_yawrate) / (side - 1);
+    cfg.max_accel = 1e6f; cfg.max_dyawrate = 1e6f;
+    State x{{1.0f, 1.0f, 0.0f, 0.0f, 0.0f}};
+    Window dw = calc_dynamic_window(x, cfg);
+    int n = 0;
+    for (float v = dw[0]; v <= dw[1]; v += cfg.v_reso)
+        for (float y = dw[2]; y <= dw[3]; y += cfg.yawrate_reso) n++;
+    return n;
+}

@@ -12,6 +12,9 @@
 double bench_cpprobotics(int side, int reps, int n_obstacles);
 double bench_goktug(int side, int reps, int n_obstacles);
 double bench_amslabtech(int side, int reps, int n_obstacles);
+int count_cpprobotics(int side);
+int count_goktug(int side);
+int count_amslabtech(int side);
 
 #include "trace.h"
 
@@ -328,6 +331,20 @@ int main(int argc, char** argv) {
         for (int a = 0; a < 10; a++) for (int b = 0; b < 10; b++)
             MAP[(size_t)(r + a) * NW + (c + b)] = (int8_t)254;
     }
+
+    // The counts each one's own loop evaluates.  "Same window, same
+    // resolution" is exact; "same trajectory count" is not, because four
+    // loop constructions disagree about their own bounds -- this repo's
+    // lattice includes both, CppRobotics accumulates to <=, goktug97 truncates
+    // an int division, amslabtech walks side * side -- so the row is labelled
+    // by this repo's count and the rest are printed here rather than claimed.
+    printf("\n  trajectories each one evaluates for the same window:\n");
+    printf("  %13s %14s %16s %16s %16s\n", "side", "this repo",
+           "CppRobotics", "goktug97 (C)", "amslabtech");
+    for (int side : {6, 10, 20, 30, 50})
+        printf("  %13d %14d %16d %16d %16d\n", side,
+               mine_sweep(side, 5.0, 5.0), count_cpprobotics(side),
+               count_goktug(side), count_amslabtech(side));
 
     printf("\n  %13s %14s %16s %16s %16s\n", "trajectories", "this repo",
            "CppRobotics", "goktug97 (C)", "amslabtech");

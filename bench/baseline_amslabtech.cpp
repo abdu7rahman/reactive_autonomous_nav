@@ -245,3 +245,8 @@ void trace_amslabtech(const TraceIn& in, TraceOut& out) {
     out.ms = trace_median(ms);
     out.rolls = trace_median(rolls);
 }
+
+// Its harness walks two explicit `for (i < side)` loops, so its count is
+// side * side exactly.  Stated by the same function the others use so the
+// table cannot drift away from it.
+int count_amslabtech(int side) { return side * side; }

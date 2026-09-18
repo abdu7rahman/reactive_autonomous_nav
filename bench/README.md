@@ -139,8 +139,8 @@ the goal connects, so open maps still finish in ~20 ms.
 
 ## Local controller vs other DWA implementations
 
-Six implementations, same dynamic window, same trajectory count, same 25-step
-horizon. Baselines are fetched, not vendored: `bench/fetch_baselines.sh` for
+Seven implementations, same dynamic window, same sampling resolution, same
+25-step horizon. Baselines are fetched, not vendored: `bench/fetch_baselines.sh` for
 the C and C++ ones, and `bench/dwa_compare.py` pulls the Python ones at run
 time. Only their plotting is stripped; the planner functions are theirs.
 
@@ -160,16 +160,48 @@ run-to-run spread is given with it.
 Per-cell spread across the four runs is 2.4% median. Two cells are far wider
 and both are in the two smallest rows, where a call takes 15 to 70 µs and the
 steady_clock resolution shows: 41% for this repo at 110 trajectories and 38%
-for amslabtech at 42. The 1.6-1.9× gap to CppRobotics is outside the spread at
-every count.
+for amslabtech at 42. The gap to CppRobotics is outside the spread at every
+count.
 
 The trajectory counts are 42 and 110 rather than 36 and 100 because the sweep
 now samples the window the way the controller does — `samples()`, a lattice of
 multiples of the resolution with both bounds included — and the bounds add a
-sample to each axis. The count in the row is the count that was evaluated.
+sample to each axis. Which means **the four do not evaluate the same number of
+trajectories**, even given the same window and the same resolution, because
+four loop constructions disagree about their own bounds: this repo's lattice
+includes both, CppRobotics accumulates while `v <= dw[1]`, goktug97 truncates
+an integer division and never reaches its upper bound, and amslabtech walks
+`side × side` exactly. `dwa_compare_cpp` prints the counts above the table so
+this cannot drift again:
 
-**This repo loses to CppRobotics at every trajectory count, by 1.6 to 1.9
-times.** The previous table in this file claimed the opposite, 20 to 25 percent
+| side | This repo | CppRobotics | goktug97 | amslabtech |
+| ---: | ---: | ---: | ---: | ---: |
+| 6 | 42 | 36 | 25 | 36 |
+| 10 | 110 | 90 | 81 | 100 |
+| 20 | 420 | 400 | 361 | 400 |
+| 30 | 930 | 870 | 841 | 900 |
+| 50 | 2,550 | 2,450 | 2,401 | 2,500 |
+
+So the per-call table above overstates the gap to CppRobotics slightly and
+understates the gap to goktug97, and the honest comparison is per trajectory:
+
+| side | This repo | CppRobotics | goktug97 | amslabtech |
+| ---: | ---: | ---: | ---: | ---: |
+| 6 | 0.643 µs | **0.417 µs** | 4.000 µs | 10.472 µs |
+| 10 | 0.645 µs | **0.422 µs** | 4.074 µs | 9.820 µs |
+| 20 | 0.660 µs | **0.417 µs** | 4.072 µs | 10.293 µs |
+| 30 | 0.666 µs | **0.416 µs** | 4.050 µs | 9.777 µs |
+| 50 | 0.672 µs | **0.418 µs** | 4.037 µs | 9.725 µs |
+
+Every column is flat across a 61× range in trajectory count — 1.5% for
+CppRobotics, 1.9% for goktug97, 4.6% for this repo, 7.7% for amslabtech — which
+is the check that these are per-trajectory costs and not per-call overhead
+divided by a number. Against another straightforward C++ DWA this repo costs
+1.6× per trajectory, steady across the range; goktug97 costs 6.0-6.3× this
+repo and amslabtech 14.5-16.3×.
+
+**This repo loses to CppRobotics at every trajectory count, by 1.6× per
+trajectory.** The previous table in this file claimed the opposite, 20 to 25 percent
 quicker across the range, and that number was wrong for a reason worth
 recording: `mine_sweep` in `dwa_compare_cpp.cpp` was still scoring
 
@@ -206,8 +238,8 @@ Per-cell spread across the four runs: 5.4% median, 11% worst.
 The structure is that every baseline here keeps an explicit obstacle list and
 measures each rollout point against every obstacle, while this repo reads one
 costmap cell. amslabtech does that per point in C++ with no vectorisation,
-which is the 14× at 2,550 trajectories. goktug97 walks a point cloud per
-sample, which is the 3.7–5.7×. PythonRobotics vectorises the comparison over
+which is the 14.5-16.3× per trajectory. goktug97 walks a point cloud per
+sample, which is the 6.0-6.3×. PythonRobotics vectorises the comparison over
 numpy and kmilo7204 does not, which is why they sit where they do relative to
 each other.
 
@@ -329,9 +361,14 @@ it:
   turn-in-place fallback the amslabtech trace gives its own node. Its gains are
   a harness choice either way — `dwa.h`'s `Config` is a plain C struct with no
   initialisers and its README documents the fields without values — so its
-  clearance gain was swept, with its footprint, over 18 combinations by
-  `dwa_compare_cpp --sweep-goktug`: it never arrives at any of them, and the
-  footprint changes nothing.
+  clearance gain was swept, with its footprint, over 18 combinations: it never
+  arrives at any of them, and the footprint changes nothing. Two steps, because
+  the sweep reads the same field file the figures do:
+
+  ```bash
+  python3.12 bench/gif_compare.py --field /tmp/field
+  ./bench/dwa_compare_cpp --sweep-goktug /tmp/field
+  ```
 
 `--seeds` prints the other two fields that were measured. Seed 7 is the one
 drawn because all three Python implementations arrive on it; on seed 3

@@ -145,3 +145,21 @@ void trace_goktug(const TraceIn& in, TraceOut& out) {
     out.ms = trace_median(ms);
     out.rolls = trace_median(rolls);
 }
+
+// As above: its createDynamicWindow computes nPossibleV as an int division of
+// the window by the resolution, which truncates and never includes the upper
+// bound.
+int count_goktug(int side) {
+    Config gc;
+    gc.maxSpeed = 0.5f; gc.minSpeed = 0.0f; gc.maxYawrate = 2.0f;
+    gc.maxAccel = 1e6f; gc.maxdYawrate = 1e6f;
+    gc.velocityResolution = 0.5f / (side - 1);
+    gc.yawrateResolution  = 4.0f / (side - 1);
+    gc.dt = 0.1f; gc.predictTime = 2.5f;
+    Velocity gv = {0.25f, 0.0f};
+    DynamicWindow* dw = NULL;
+    createDynamicWindow(gv, gc, &dw);
+    const int n = dw->nPossibleV * dw->nPossibleW;
+    freeDynamicWindow(dw);
+    return n;
+}

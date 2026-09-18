@@ -664,6 +664,7 @@ def main():
     ap.add_argument('--cpp', action='store_true', help='the C++ four')
     ap.add_argument('--seeds', action='store_true', help='every field measured')
     ap.add_argument('--density', action='store_true', help='arrivals vs clutter')
+    ap.add_argument('--field', metavar='PATH', help='write the field and stop')
     args = ap.parse_args()
 
     if args.seeds:
@@ -681,6 +682,14 @@ def main():
     check(ob, pts)
 
     grid = costmap(ob)
+    if args.field:
+        # Kept rather than deleted, which --cpp does with its own copy: it is
+        # the input `dwa_compare_cpp --sweep-goktug` takes, and that sweep is
+        # quoted in bench/README.md.  A documented command whose input only
+        # exists inside another command's temporary file is not reproducible.
+        f, b = field_file(ob, pts, grid, args.field)
+        print(f'  {f}\n  {b}')
+        return 0
     if args.cpp:
         runs = run_cpp(ob, pts, grid)
         if runs is None:
