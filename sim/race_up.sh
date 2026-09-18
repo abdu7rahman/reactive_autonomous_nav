@@ -54,6 +54,21 @@ export RACE_FIELD=${RACE_FIELD:-ours}
 export GZ_SIM_RESOURCE_PATH=/root/ros2_ws/tb4_overlay/share:/opt/ros/jazzy/share
 RUN=$G/run; SIM=$RUN/sim; mkdir -p "$SIM" "$RUN/log"
 
+# Tear the old world down first, always. This is a bringup, and a bringup run
+# against a world that is already up silently reuses it: `start` skips a
+# process whose pid file is live, the spawns land as new entities in the old
+# world or fail on the name that is already there, and the gate at the foot of
+# this file reports "robots live: 4/4" because the *previous* run's robots are
+# still answering on those topics.
+#
+# Which is exactly what it did. A grid brought up for the bench-cpp field
+# after the bench-py race had every robot parked where bench-py left it --
+# map->r1/base_link at y = 5.994 and r2 at 6.025, which are bench-py's own
+# finishing distances of 5.99 m and 6.03 m -- and race.sh refused the race one
+# step later with "only 2/4 robots are on the start line". The bringup said
+# RACEUP; nothing between the two knew the world was four minutes old.
+bash $G/sim_down.sh 2>&1 | sed 's/^/  /'
+
 eval "$(python3 $G/grid_tf.py --lanes)"
 echo "course $COURSE: lanes $LANES, start y=$START_Y, $N_WALLS walls"
 SPAWN_Z=0.01
