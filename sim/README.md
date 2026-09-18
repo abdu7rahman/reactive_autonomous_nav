@@ -316,6 +316,73 @@ nav2's controllers take a path only through the `FollowPath` action on
 the action for a nav2 lane, `/plan` for this package's controllers, and
 `/goal_pose` for a lane running a whole stack.
 
+### The bench fields
+
+`bench/README.md` compares seven DWA implementations by timing them and by
+drawing them across a field of scattered blocks. These two fields put the same
+seven on TurtleBot 4s in Gazebo: same robot, same costmap settings, same
+reference path, released in the same instant, with each implementation's own
+scoring function choosing the commands through
+`reactive_autonomous_nav/baseline_controller.py` for the Python pair and
+`cpp/src/baseline_controller.cpp` for the C and C++ three. The C and C++ ones
+call `bench/baseline_*.cpp`'s `step_*` -- the same per-tick function the drawn
+figure's traces loop over, so the clip and the figure cannot drift apart.
+
+Two clips rather than one because the chicane is five lanes wide and the
+comparison is seven implementations: the free rectangle the course was measured
+into is 10.0 m across and five 1.7 m lanes already take 8.5 m of it. Splitting
+on language puts this repo's own DWA in both as the common lane.
+
+```bash
+RACE_COURSE=chicane RACE_FIELD=bench-py  race_up.sh && \
+RACE_COURSE=chicane RACE_FIELD=bench-py  race.sh 600
+RACE_COURSE=chicane RACE_FIELD=bench-cpp race_up.sh && \
+RACE_COURSE=chicane RACE_FIELD=bench-cpp race.sh 600
+```
+
+![this repo's DWA against the two reference Python implementations](gif/race-chicane-bench-py.gif)
+
+| lane | controller | finished |
+|---|---|---|
+| r2 | dwa-py | 13.9 s, 6.03 m |
+| r1 | dwa-c++ | 13.9 s, 5.99 m |
+| r3 | PythonRobotics | did not cross: 0.32 m of 5.80 |
+| r4 | kmilo7204 | did not cross: 0.32 m of 5.80 |
+
+![this repo's C++ DWA against the three C and C++ baselines](gif/race-chicane-bench-cpp.gif)
+
+| lane | controller | finished |
+|---|---|---|
+| r1 | dwa-c++ | 14.0 s, 5.97 m |
+| r4 | amslabtech | 23.4 s, 5.87 m |
+| r2 | CppRobotics | 96.2 s, 5.80 m |
+| r3 | goktug97 | did not cross: 0.09 m of 5.80 |
+
+**What the two halves agree about, and what they do not.** The C and C++ order
+is the drawn figure's order: amslabtech arrives, CppRobotics is far behind, and
+goktug97 does not get there. That is a cross-check worth having, because the
+figure and the race share no code below `step_*` -- different plant, different
+obstacles, different goal.
+
+The Python half does not agree, and that is the more useful half. In the drawn
+field both references arrive -- PythonRobotics in 55.0 s over 19.16 m,
+kmilo7204 in 71.4 s over 18.70 m -- and in a 1.10 m corridor neither gets a
+third of a metre. The field is the difference: 18 blocks scattered in a 12 m
+square leave room to swing wide of everything, and a chicane does not.
+
+**What is handed to a goal seeker on a tracking course**, since both halves
+rest on it and both are choices rather than facts. Obstacles are the occupied
+cells of the lane's own 6 x 6 m local costmap at its 0.22 m inscribed radius,
+which is this package's lethal test written the way these implementations take
+it. Handing them every cell at 253 or above instead -- the inscribed ring too,
+at half a cell of radius -- is the same collision test and a different
+clearance, because it dilates every wall by 0.22 m and two of the three score
+clearance as an unnormalised `1 / min_r`. Measured: 0.23 m reached instead of
+0.32 m, against 1,135 inscribed cells and 88 occupied ones in the costmap they
+were given. And the goal each is driven at is the same lookahead point this
+package's own DWA steers at, because a goal seeker handed the far end of a
+slalom drives into the first wall, which measures the course.
+
 ### The versus field
 
 Both implementations of this repo's DWA against nav2's, in one race.
