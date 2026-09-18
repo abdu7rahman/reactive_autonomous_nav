@@ -45,7 +45,7 @@ Custom reactive autonomous navigation stack for TurtleBot4, built on ROS2 Jazzy.
 | `pure_pursuit` | Pure Pursuit | Working — monotonic lookahead, curvature-limited speed |
 | `stanley` | Stanley | Working — monotonic reference point |
 | `teb` | Timed Elastic Band | Working — sliding band window |
-| `mppi` | MPPI | Working — 1000 samples, 2.8 s horizon re-split by the measured tick interval |
+| `mppi` | MPPI | Working — 1000 samples, 2.8 s horizon re-split by the measured tick interval; the only one here that needs the host to hold its 50 ms period, see the race table |
 
 ---
 

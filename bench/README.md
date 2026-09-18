@@ -283,13 +283,13 @@ trajectories):
 
 | Obstacles | This repo | PythonRobotics | kmilo7204 |
 | ---: | ---: | ---: | ---: |
-| 20 | 0.74 ms | 35.23 ms | 42.62 ms |
-| 100 | 0.74 ms | 41.97 ms | 50.59 ms |
-| 500 | 0.74 ms | 79.22 ms | 94.16 ms |
-| 2,000 | **0.74 ms** | 334.02 ms | **439.39 ms** |
+| 20 | 1.17 ms | 53.32 ms | 66.55 ms |
+| 100 | 1.17 ms | 65.29 ms | 86.59 ms |
+| 500 | 1.17 ms | 129.35 ms | 153.00 ms |
+| 2,000 | **1.17 ms** | 538.28 ms | **703.04 ms** |
 
 Flat versus linear, and flat across a hundredfold change in obstacle count
-against a 4.9% median spread on the same cells. A costmap has
+against a 10.3% median spread on the same cells. A costmap has
 to be built and maintained by something else first, so this is a trade rather
 than a free win.
 
