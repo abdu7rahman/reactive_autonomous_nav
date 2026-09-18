@@ -133,35 +133,71 @@ controllers in the same instant.
 
 ![the chicane race](gif/race-chicane.gif)
 
-| lane | controller | finished | re-run at RTF 0.176 |
-|---|---|---|---|
-| r1 | dwa | 14.0 s | 13.9 s |
-| r4 | teb | 16.7 s | 16.8 s |
-| r2 | pure_pursuit | 18.9 s | 18.9 s |
-| r3 | stanley | 21.1 s | 21.1 s |
-| r5 | mppi | 24.8 s | **did not finish: 3.89 m of 5.80** |
+| lane | controller | finished |
+|---|---|---|
+| r1 | dwa | 14.0 s |
+| r4 | teb | 16.8 s |
+| r2 | pure_pursuit | 18.9 s |
+| r3 | stanley | 21.2 s |
+| r5 | mppi | 23.8 s |
 
-Simulated seconds from the release. The first four reproduce across five races
-to a tenth of a second -- 13.9-14.0, 16.7-16.8, 18.9-19.0, 21.1-21.2 -- which
-they should, because every robot is handed the same path and nothing in the run
-is random.
+Simulated seconds from the release, on a host the simulator clocks at a
+real-time factor of 0.176 -- about half the 0.317 the first five races were
+run at. All five reproduce there to a tenth of a second, and MPPI is a second
+quicker than it used to be. Getting the fifth lane to that took two faults,
+neither of them the deadline it looked like.
 
-**The fifth does not, and the reason is the machine.** The right-hand column is
-the same race on a host measurably slower than the one the left-hand column
-came off: the simulator's own clock reports a real-time factor of 0.176 against
-0.317, and every benchmark in `bench/` measured 1.52 to 1.69 times slower in
-the same window. Four controllers do not care, because their per-tick cost is a
-small fraction of their control period whatever the host. MPPI's is not: it
-measures 62 ms median and 191 ms worst under race load against a 50 ms period,
-and at a real-time factor of 0.176 that period is 284 ms of wall clock rather
-than 158. It stalls at 3.89 m.
+**MPPI was not missing its deadline.** Its own per-tick line through a failing
+race reads `opt=16-40ms` against a 50 ms period, with the distance to its goal
+counting steadily down to 0.71 m. It was driving; the race ended under it.
 
-That is not a second bug. It is the same one the section below measures --
-MPPI was running at six times its own control period before the horizon was
-re-split -- and what this pair of races adds is that the fix left it with a
-margin that a slower host takes away. A simulated-time result that moves when
-the wall clock moves is a result about scheduling, so both numbers are here
-rather than the flattering one. The order is the straight's order, but the gaps are not: first to
+**The race timer was calling a moving robot stalled.** `STALL`'s comment says
+"a robot that has gained less than a centimetre in this many simulated seconds
+has stopped racing", and the code compared the new odometry x against
+`progress[ns]` -- which is bumped to x a line further down on every
+improvement. So it asked whether a *single odometry message* had advanced more
+than a centimetre. At 0.29 m/s and 50 Hz of odometry that is 0.006 m and never
+true. The four quicker robots escaped the rule by being in `finished`; the
+fifth was judged on a stamp that had not moved since the grid released, and
+the run ended at exactly `t0 + STALL`:
+
+    race over: no robot has moved for 25s at 25.0s
+
+with r5 at 3.9 m and climbing in the progress line three seconds earlier. That
+is also why 24.8 s counted as a finish once and 4.39 m of 5.80 did not -- the
+same guillotine, two tenths of a second on the other side of it. There is an
+anchor now, updated only when the stamp is, so the rule measures what its
+comment says.
+
+**And the controller was reading the wrong clock.** `self.dt` is the timestep
+its rollouts integrate the robot with, and it was set from
+`time.perf_counter()` while the control timer fires on simulated time under
+`use_sim_time`. The two differ by the real-time factor, so a 50 ms period was
+measured as 158 ms at 0.317 and 284 ms at 0.176, clamped to the 233 ms bound
+-- the `dt=233ms` on every line of that race log. Measured on
+`bench/test_chicane.py`'s course with the two clocks pulled apart:
+
+| | before | after |
+|---|---|---|
+| time to the goal at RTF 0.176 | 21.5 s | 20.6 s |
+| worst deviation at RTF 0.176 | 0.174 m | 0.114 m |
+| model dt | 158-233 ms | 50 ms at every RTF |
+
+It reads the node clock now, which is simulated time in the simulator and the
+wall clock on a robot. The deviation is the real cost: a third of the
+tracking error was the controller integrating with a timestep four times too
+long.
+
+Three explanations were tested and refuted before those two, and they are
+worth keeping so they are not tried again. The clock mismatch alone does not
+stall it, a plant throttled to 0.30, 0.20 or 0.15 m/s does not, and the two
+together do not -- all twelve combinations reach the goal. The fault was never
+in the controller's speed.
+
+The section below, on MPPI running at six times its own control period, is
+the earlier and separate fault that made its tick expensive in the first
+place. These two are about which clock the loop read and when the race was
+allowed to end. The order is the straight's order, but the gaps are not: first to
 fourth spans 7.2 s here against 4.1 s on the straight, and stanley, which
 tracks the path most tightly of the five, pays the most for it.
 

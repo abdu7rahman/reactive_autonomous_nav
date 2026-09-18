@@ -45,7 +45,7 @@ Custom reactive autonomous navigation stack for TurtleBot4, built on ROS2 Jazzy.
 | `pure_pursuit` | Pure Pursuit | Working — monotonic lookahead, curvature-limited speed |
 | `stanley` | Stanley | Working — monotonic reference point |
 | `teb` | Timed Elastic Band | Working — sliding band window |
-| `mppi` | MPPI | Working — 1000 samples, 2.8 s horizon re-split by the measured tick interval; the only one here that needs the host to hold its 50 ms period, see the race table |
+| `mppi` | MPPI | Working — 1000 samples, 2.8 s horizon re-split by the measured tick interval, measured on the node's clock so the split is the same on any host |
 
 ---
 
@@ -102,26 +102,31 @@ with the walls.
 
 ![the chicane race](sim/gif/race-chicane.gif)
 
-| lane | controller | finished | re-run, slower host |
-| --- | --- | --- | --- |
-| r1 | dwa | 14.0 s | 13.9 s |
-| r4 | teb | 16.7 s | 16.8 s |
-| r2 | pure_pursuit | 18.9 s | 18.9 s |
-| r3 | stanley | 21.1 s | 21.1 s |
-| r5 | mppi | 24.8 s | **3.89 m of 5.80** |
+| lane | controller | finished |
+| --- | --- | --- |
+| r1 | dwa | 14.0 s |
+| r4 | teb | 16.8 s |
+| r2 | pure_pursuit | 18.9 s |
+| r3 | stanley | 21.2 s |
+| r5 | mppi | 23.8 s |
 
-The first four reproduce across five races to a tenth of a second. The order is
-the straight course's order but the gaps are not: first to fourth spans 7.2 s
-here against 4.1 s on the straight, and stanley, which tracks the path most
-tightly of the five, pays the most for it.
+The order is the straight course's order but the gaps are not: first to fourth
+spans 7.2 s here against 4.1 s on the straight, and stanley, which tracks the
+path most tightly of the five, pays the most for it.
 
-The fifth is a result about scheduling. The right-hand column is the same race
-on a host where the simulator reports a real-time factor of 0.176 against
-0.317; MPPI's tick is 62 ms median and 191 ms worst under race load against a
-50 ms control period, and at that factor the period is 284 ms of wall clock
-rather than 158. It stalls at 3.89 m. Four controllers whose tick is a small
-fraction of their period do not notice. Both numbers are here rather than the
-flattering one. Both courses, both other fields, and what each one cost to get
+All five reproduce on a host the simulator clocks at half the real-time factor
+the first races were run at, but only after two faults that looked like a
+missed deadline and were not. MPPI's own log through a failing race reads
+`opt=16-40ms` against a 50 ms period with its goal distance still counting
+down: the *race timer* was ending the run. Its stall rule compared each
+odometry reading against a progress value updated on the same message, so it
+asked whether one message had advanced a centimetre — 0.006 m at 0.29 m/s, and
+never true — and every race ended at exactly 25 s. Separately the controller
+set the timestep its rollouts integrate with from `time.perf_counter()` while
+its timer fires on simulated time, so a 50 ms period read as 233 ms; fixing
+that took its worst deviation from 0.174 m to 0.114 m.
+
+Both courses, both other fields, and what each one cost to get
 running are in [`sim/README.md`](sim/README.md).
 
 `astar` with `dwa` is the same configuration in both halves, so it is recorded
