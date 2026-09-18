@@ -310,15 +310,19 @@ instead, on the same robot, the same costmap settings and the same path — see
 
 | lane | controller | finished |
 | --- | --- | --- |
-| r1 | dwa-c++ (this repo) | 13.8 s, 6.00 m |
-| r2 | dwa-py (this repo) | 14.0 s, 6.00 m |
-| r5 | nav2 `RegulatedPurePursuitController` | 14.5 s, 5.88 m |
-| r3 | nav2 `DWBLocalPlanner` | did not cross: 5.78 m of 5.80 |
-| r4 | nav2 `MPPIController` | did not cross: 2.36 m of 5.80 |
+| r1 | dwa-c++ (this repo) | 13.9 s, 5.98 m |
+| r2 | dwa-py (this repo) | 14.0 s, 6.01 m |
+| r5 | nav2 `RegulatedPurePursuitController` | 14.5 s, 5.87 m |
+| r3 | nav2 `DWBLocalPlanner` | did not cross: 5.79 m of 5.80 |
+| r4 | nav2 `MPPIController` | did not cross: 2.37 m of 5.80 |
 
 Read the second column before the first: DWB drove the whole course and is not
-credited with a finish because it stopped 20 mm short of a line the timer
-measures by crossing.
+credited with a finish because it stopped 10 mm short of a line the timer
+measures by crossing. Both this race and the nav2 field ran 51 s rather than
+the 25 s the race timer's stall rule used to allow, so the two that do not
+cross had twice as long and did not use it — and nav2's graceful controller,
+which that rule had been cutting off at 5.74 m, finishes the nav2 field in
+25.8 s.
 
 This is also where the optimised rollout loop is checked against a robot
 rather than a harness: lane r1 went 13.9 s to 13.8 s across the change, which

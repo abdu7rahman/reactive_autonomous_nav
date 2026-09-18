@@ -101,24 +101,22 @@ tracker.
 
 | lane | controller | finished |
 |---|---|---|
-| r1 | dwa | 13.2 s |
+| r1 | dwa | 13.0 s |
 | r4 | teb | 14.9 s |
 | r2 | pure_pursuit | 17.3 s |
 | r3 | stanley | 17.3 s |
 | r5 | mppi | 18.6 s |
 
-Simulated seconds from the grid release to the finish line. The first four are
-repeatable to a tenth of a second over six races -- 13.2-13.3, 14.9-15.0,
-17.3-17.4, 17.3-17.4 -- which they should be: the straight is clear, the goals
-are the same distance away, and nothing in the run is random. MPPI's 18.6 s is
-one race, the first in which it finished at all; the five before it are in the
-MPPI section below, along with what was wrong.
+Simulated seconds from the grid release to the finish line. Repeatable to a
+tenth of a second over seven races -- 13.0-13.3, 14.9-15.0, 17.3-17.4,
+17.3-17.4, 18.6 -- which they should be: the straight is clear, the goals are
+the same distance away, and nothing in the run is random.
 
-DWA's 13.2 s predates the velocity-window repair below, which raised its
-angular acceleration limit to the plant's own. On a clear straight that fix
-changes almost nothing -- there is nothing to steer around -- but the number
-has not been re-measured since, and it is the one figure in this document that
-belongs to an older build of the controller.
+DWA's 13.0 s is the velocity-window repair below finally showing up here: the
+table read 13.2 s for six races against a build whose angular acceleration
+limit was 7.7 times more conservative than the plant's. On a clear straight
+that fix has almost nothing to work with -- there is nothing to steer around
+-- and two tenths of a second is what it is worth.
 
 ### The chicane: five trackers, one path
 
@@ -266,19 +264,25 @@ RACE_COURSE=chicane RACE_FIELD=nav2 race.sh 900
 
 ![this repo's DWA against nav2's controllers](gif/race-chicane-nav2.gif)
 
-| lane | controller | finished | re-run at RTF 0.176 |
-|---|---|---|---|
-| r1 | dwa (this repo) | 14.0 s, 6.00 m | 13.9 s, 6.05 m |
-| r4 | nav2 pursuit (`RegulatedPurePursuitController`) | 14.5 s, 5.87 m | 14.5 s, 5.88 m |
-| r2 | nav2 dwb (`DWBLocalPlanner`) | 5.79 m of 5.80 | 5.78 m of 5.80 |
-| r5 | nav2 graceful (`GracefulController`) | 5.74 m of 5.80 | 5.74 m of 5.80 |
-| r3 | nav2 mppi (`MPPIController`) | 2.35 m of 5.80 | 2.36 m of 5.80 |
+| lane | controller | finished |
+|---|---|---|
+| r1 | dwa (this repo) | 13.9 s, 5.99 m |
+| r4 | nav2 pursuit (`RegulatedPurePursuitController`) | 14.5 s, 5.87 m |
+| r5 | nav2 graceful (`GracefulController`) | 25.8 s, 5.86 m |
+| r2 | nav2 dwb (`DWBLocalPlanner`) | did not cross: 5.79 m of 5.80 |
+| r3 | nav2 mppi (`MPPIController`) | did not cross: 2.37 m of 5.80 |
 
-This field reproduces on the slower host in every lane, including nav2's own
-MPPI, which stops in the same place to a centimetre. Whatever stops it at
-2.36 m is not a deadline it is missing -- unlike this package's MPPI one
-section above, which is the only entry in either field that moves with the
-wall clock.
+**nav2's graceful controller finishes now, and did not before.** It was one of
+the two entries the race timer's stall rule cut off: it needs 25.8 s and the
+rule ended every race at 25.0 s, so it was recorded at 5.74 m of 5.80 twice.
+The rule is fixed one section above, and this field is what it was hiding --
+the race now runs 51.4 s, and with that much rope dwb still stops 10 mm short
+of the line and nav2's MPPI still stops at 2.37 m. Those two are real: they
+had twice the time and did not use it.
+
+Read dwb's row before the others. It drove the whole course and is not
+credited with a finish because it stopped 10 mm short of a line the timer
+measures by crossing, which is a goal tolerance and not a failure to track.
 
 Read the second column before the first. DWB drove the whole course and is not
 credited with a finish because it stopped 10 mm short of a line the timer
@@ -325,11 +329,14 @@ RACE_COURSE=chicane RACE_FIELD=versus race.sh 900
 
 | lane | controller | finished |
 |---|---|---|
-| r1 | dwa-c++ | 13.8 s, 6.00 m |
-| r2 | dwa-py | 14.0 s, 6.00 m |
-| r5 | nav2-pursuit | 14.5 s, 5.88 m |
-| r3 | nav2-dwb | did not cross: 5.78 m of 5.80 |
-| r4 | nav2-mppi | did not cross: 2.36 m of 5.80 |
+| r1 | dwa-c++ | 13.9 s, 5.98 m |
+| r2 | dwa-py | 14.0 s, 6.01 m |
+| r5 | nav2-pursuit | 14.5 s, 5.87 m |
+| r3 | nav2-dwb | did not cross: 5.79 m of 5.80 |
+| r4 | nav2-mppi | did not cross: 2.37 m of 5.80 |
+
+Run to 51.3 s rather than the 25 s the stall rule used to allow, so the two
+that do not cross had twice as long and did not use it.
 
 This is the run that checks the optimised rollout loop in a live graph rather
 than in a harness. The four changes in it -- the heading's cos and sin advanced

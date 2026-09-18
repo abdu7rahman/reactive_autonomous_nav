@@ -220,11 +220,20 @@ echo "    sim ${C0}s to ${C1}s over $(python3 -c "print(f'{${T1:-0}-${T0:-0}:.0f
 
 # Trim to the last finisher rather than the first: the point of the clip is who
 # arrives when, and cutting at the winner throws four of the five results away.
-# The later of the last crossing and the moment the race was called.  Trimming
-# to the last crossing alone cut the nav2 field's clip at 14.5 s with three
-# robots still driving up the course, two of which stopped within 0.06 m of the
-# line: the interesting part of that race was entirely after the last finisher.
-LAST=$(grep -oE "crossed at [0-9.]+ s|race over: .* at [0-9.]+s" \
+# Trimming to the last crossing alone cut the nav2 field's clip at 14.5 s with
+# three robots still driving up the course, two of which stopped within 0.06 m
+# of the line: the interesting part of that race was entirely after the last
+# finisher.
+#
+# So it is the later of the last crossing and the last moment any robot gained
+# ground.  It used to be the later of the last crossing and "race over", which
+# was the same thing only because the stall rule fired early -- it compared a
+# robot's position against a value updated on the same odometry message, so it
+# ended every race at t0 + STALL.  With that fixed a field holding a robot
+# that stops short runs STALL seconds past the point where anything moves, and
+# trimming there gave the nav2 and versus clips 25 s of parked robots and 9.6
+# MB apiece against 5.
+LAST=$(grep -oE "crossed at [0-9.]+ s|last progress at [0-9.]+s" \
        "$RUN/log/$TAG.timer.log" 2>/dev/null \
        | grep -oE "[0-9.]+" | sort -g | tail -1)
 TRIM=""

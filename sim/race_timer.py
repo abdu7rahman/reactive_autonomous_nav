@@ -342,6 +342,13 @@ def main() -> int:
 
     print('', flush=True)
     print(f'race over: {reason} at {t.sim - t.t0:.1f}s', flush=True)
+    # When any robot last gained ground, which is where the clip should end.
+    # "race over" is not that moment any more: with the stall rule measuring
+    # what its comment says, a field holding a robot that stops short ends
+    # STALL seconds after it stopped, and trimming there leaves the gif with
+    # 25 s of parked robots. Before the rule was fixed the two coincided,
+    # because the rule fired the moment the quick robots crossed.
+    print(f'last progress at {max(t.moved.values()) - t.t0:.1f}s', flush=True)
     print('finish order (simulated seconds from the grid release):', flush=True)
     order = sorted(GRID, key=lambda g: (t.finished.get(g[0], float('inf')),
                                         -t.progress[g[0]]))
