@@ -3,14 +3,14 @@
   "window": "accel-limited",
   "N": 410,
   "T": 25,
-  "ms": 0.9606,
-  "min_ms": 0.8107
+  "ms": 1.3604,
+  "min_ms": 1.2054
  },
  {
   "window": "full velocity space",
   "N": 2626,
   "T": 25,
-  "ms": 4.5947,
-  "min_ms": 4.2392
+  "ms": 7.8457,
+  "min_ms": 7.1007
  }
 ]
