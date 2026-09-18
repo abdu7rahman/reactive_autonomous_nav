@@ -297,15 +297,20 @@ instead, on the same robot, the same costmap settings and the same path — see
 
 | lane | controller | finished |
 | --- | --- | --- |
-| r1 | dwa-c++ (this repo) | 13.9 s, 5.98 m |
-| r2 | dwa-py (this repo) | 13.9 s, 6.05 m |
+| r1 | dwa-c++ (this repo) | 13.8 s, 6.00 m |
+| r2 | dwa-py (this repo) | 14.0 s, 6.00 m |
 | r5 | nav2 `RegulatedPurePursuitController` | 14.5 s, 5.88 m |
-| r3 | nav2 `DWBLocalPlanner` | did not cross: 5.79 m of 5.80 |
-| r4 | nav2 `MPPIController` | did not cross: 2.35 m of 5.80 |
+| r3 | nav2 `DWBLocalPlanner` | did not cross: 5.78 m of 5.80 |
+| r4 | nav2 `MPPIController` | did not cross: 2.36 m of 5.80 |
 
 Read the second column before the first: DWB drove the whole course and is not
-credited with a finish because it stopped 10 mm short of a line the timer
+credited with a finish because it stopped 20 mm short of a line the timer
 measures by crossing.
+
+This is also where the optimised rollout loop is checked against a robot
+rather than a harness: lane r1 went 13.9 s to 13.8 s across the change, which
+is inside the spread the first four lanes reproduce to, so the loop got cheaper
+and the controller did not move.
 
 
 ## Dependencies

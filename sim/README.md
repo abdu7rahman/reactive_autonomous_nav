@@ -266,13 +266,23 @@ RACE_COURSE=chicane RACE_FIELD=versus race.sh 900
 
 | lane | controller | finished |
 |---|---|---|
-| r1 | dwa-c++ | 13.9 s, 5.98 m |
-| r2 | dwa-py | 13.9 s, 6.05 m |
+| r1 | dwa-c++ | 13.8 s, 6.00 m |
+| r2 | dwa-py | 14.0 s, 6.00 m |
 | r5 | nav2-pursuit | 14.5 s, 5.88 m |
-| r3 | nav2-dwb | did not cross: 5.79 m of 5.80 |
-| r4 | nav2-mppi | did not cross: 2.35 m of 5.80 |
+| r3 | nav2-dwb | did not cross: 5.78 m of 5.80 |
+| r4 | nav2-mppi | did not cross: 2.36 m of 5.80 |
 
-The C++ and Python controllers finish the same course within a tenth of a
+This is the run that checks the optimised rollout loop in a live graph rather
+than in a harness. The four changes in it -- the heading's cos and sin advanced
+by one rotation per step instead of recomputed, a squared arrival test, and two
+precomputed reciprocals -- are 4.6 to 5.1 times quicker per window and choose
+the same command in all 1,944 states `bench/dwa_compare_cpp.cpp` compares them
+over. On this course the lane went 13.9 s to 13.8 s, which is inside the
+tenth-of-a-second the first four lanes reproduce to across five races, so the
+right reading is that nothing changed rather than that it got quicker. What
+the margin buys is headroom on a shorter control period, not a faster lap.
+
+The C++ and Python controllers finish the same course within two tenths of a
 second of each other, which is the answer to the question the lane exists to
 ask: the port is the same controller, not a faster one. Where the C++ is ahead
 is per tick, not per race -- 0.0895 ms against 1.360 ms on the same
