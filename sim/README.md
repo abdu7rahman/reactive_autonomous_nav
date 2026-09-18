@@ -133,18 +133,35 @@ controllers in the same instant.
 
 ![the chicane race](gif/race-chicane.gif)
 
-| lane | controller | finished |
-|---|---|---|
-| r1 | dwa | 14.0 s |
-| r4 | teb | 16.7 s |
-| r2 | pure_pursuit | 18.9 s |
-| r3 | stanley | 21.2 s |
-| r5 | mppi | 24.8 s |
+| lane | controller | finished | re-run at RTF 0.176 |
+|---|---|---|---|
+| r1 | dwa | 14.0 s | 13.9 s |
+| r4 | teb | 16.7 s | 16.8 s |
+| r2 | pure_pursuit | 18.9 s | 18.9 s |
+| r3 | stanley | 21.1 s | 21.1 s |
+| r5 | mppi | 24.8 s | **did not finish: 3.89 m of 5.80** |
 
 Simulated seconds from the release. The first four reproduce across five races
 to a tenth of a second -- 13.9-14.0, 16.7-16.8, 18.9-19.0, 21.1-21.2 -- which
 they should, because every robot is handed the same path and nothing in the run
-is random. The order is the straight's order, but the gaps are not: first to
+is random.
+
+**The fifth does not, and the reason is the machine.** The right-hand column is
+the same race on a host measurably slower than the one the left-hand column
+came off: the simulator's own clock reports a real-time factor of 0.176 against
+0.317, and every benchmark in `bench/` measured 1.52 to 1.69 times slower in
+the same window. Four controllers do not care, because their per-tick cost is a
+small fraction of their control period whatever the host. MPPI's is not: it
+measures 62 ms median and 191 ms worst under race load against a 50 ms period,
+and at a real-time factor of 0.176 that period is 284 ms of wall clock rather
+than 158. It stalls at 3.89 m.
+
+That is not a second bug. It is the same one the section below measures --
+MPPI was running at six times its own control period before the horizon was
+re-split -- and what this pair of races adds is that the fix left it with a
+margin that a slower host takes away. A simulated-time result that moves when
+the wall clock moves is a result about scheduling, so both numbers are here
+rather than the flattering one. The order is the straight's order, but the gaps are not: first to
 fourth spans 7.2 s here against 4.1 s on the straight, and stanley, which
 tracks the path most tightly of the five, pays the most for it.
 
@@ -213,13 +230,19 @@ RACE_COURSE=chicane RACE_FIELD=nav2 race.sh 900
 
 ![this repo's DWA against nav2's controllers](gif/race-chicane-nav2.gif)
 
-| lane | controller | finished |
-|---|---|---|
-| r1 | dwa (this repo) | 14.0 s, 6.00 m |
-| r4 | nav2 pursuit (`RegulatedPurePursuitController`) | 14.5 s, 5.87 m |
-| r2 | nav2 dwb (`DWBLocalPlanner`) | did not cross: 5.79 m of 5.80 |
-| r5 | nav2 graceful (`GracefulController`) | did not cross: 5.74 m of 5.80 |
-| r3 | nav2 mppi (`MPPIController`) | did not cross: 2.35 m of 5.80 |
+| lane | controller | finished | re-run at RTF 0.176 |
+|---|---|---|---|
+| r1 | dwa (this repo) | 14.0 s, 6.00 m | 13.9 s, 6.05 m |
+| r4 | nav2 pursuit (`RegulatedPurePursuitController`) | 14.5 s, 5.87 m | 14.5 s, 5.88 m |
+| r2 | nav2 dwb (`DWBLocalPlanner`) | 5.79 m of 5.80 | 5.78 m of 5.80 |
+| r5 | nav2 graceful (`GracefulController`) | 5.74 m of 5.80 | 5.74 m of 5.80 |
+| r3 | nav2 mppi (`MPPIController`) | 2.35 m of 5.80 | 2.36 m of 5.80 |
+
+This field reproduces on the slower host in every lane, including nav2's own
+MPPI, which stops in the same place to a centimetre. Whatever stops it at
+2.36 m is not a deadline it is missing -- unlike this package's MPPI one
+section above, which is the only entry in either field that moves with the
+wall clock.
 
 Read the second column before the first. DWB drove the whole course and is not
 credited with a finish because it stopped 10 mm short of a line the timer

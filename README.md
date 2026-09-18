@@ -102,19 +102,27 @@ with the walls.
 
 ![the chicane race](sim/gif/race-chicane.gif)
 
-| lane | controller | finished |
-| --- | --- | --- |
-| r1 | dwa | 14.0 s |
-| r4 | teb | 16.7 s |
-| r2 | pure_pursuit | 18.9 s |
-| r3 | stanley | 21.2 s |
-| r5 | mppi | 24.8 s |
+| lane | controller | finished | re-run, slower host |
+| --- | --- | --- | --- |
+| r1 | dwa | 14.0 s | 13.9 s |
+| r4 | teb | 16.7 s | 16.8 s |
+| r2 | pure_pursuit | 18.9 s | 18.9 s |
+| r3 | stanley | 21.1 s | 21.1 s |
+| r5 | mppi | 24.8 s | **3.89 m of 5.80** |
 
 The first four reproduce across five races to a tenth of a second. The order is
 the straight course's order but the gaps are not: first to fourth spans 7.2 s
 here against 4.1 s on the straight, and stanley, which tracks the path most
-tightly of the five, pays the most for it. Both courses, both other fields, and
-what each one cost to get running are in [`sim/README.md`](sim/README.md).
+tightly of the five, pays the most for it.
+
+The fifth is a result about scheduling. The right-hand column is the same race
+on a host where the simulator reports a real-time factor of 0.176 against
+0.317; MPPI's tick is 62 ms median and 191 ms worst under race load against a
+50 ms control period, and at that factor the period is 284 ms of wall clock
+rather than 158. It stalls at 3.89 m. Four controllers whose tick is a small
+fraction of their period do not notice. Both numbers are here rather than the
+flattering one. Both courses, both other fields, and what each one cost to get
+running are in [`sim/README.md`](sim/README.md).
 
 `astar` with `dwa` is the same configuration in both halves, so it is recorded
 once and shown twice rather than run twice — two runs of one pair would differ
