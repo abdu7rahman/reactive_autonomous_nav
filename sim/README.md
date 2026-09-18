@@ -544,6 +544,34 @@ lifecycle node inside a sub-namespace of its own name, so a node given
 `/r1/local_costmap/local_costmap` waits forever. It is also what puts the
 published topics where the remappings expect them.
 
+### MPPI's single-robot clip does not reproduce on this host
+
+`gif/controller-mppi.gif` is a real run and a slower machine cannot repeat it.
+Recorded when the simulator was managing a real-time factor around 0.3, it
+reaches its goal in the warehouse. Re-recorded on a host clocking 0.083 for
+that scene, MPPI stops short and stays stopped, and it does so whichever clock
+the horizon split is measured on:
+
+| | stopped at | left to run | model dt |
+|---|---|---|---|
+| node clock (current) | (1.43, -0.15) | 3.28 m | 50 ms |
+| `perf_counter`, as it was | (2.28, -1.37) | 1.86 m | 233 ms |
+
+Both runs drove cleanly off the line -- v = 0.25 to 0.39 m/s for the first
+metre and a half -- and then held v near zero with the goal still ahead. So
+the clock fix did not cause this and does not cure it: the scene fails on this
+machine either way, and the old clock happens to get 1.4 m further. The clip
+in the table above is the earlier recording, kept because it is a true run and
+labelled here because it is not one this host can produce.
+
+It is also the first time that scene has ever run at the nominal 56-step
+split. The old clock clamped dt to 233 ms in a single-robot warehouse, so
+every previous recording of it was made at 12 steps. What stops it at 56 is
+not established, and guessing at it is what the three refuted explanations
+above were. The races are the measurement that matters for the controller and
+all five of them finish; this is one scene on one machine, written down rather
+than quietly re-recorded until it passed.
+
 ### MPPI was six times slower than its own control period
 
 For the first five races MPPI was the only controller that did not finish, and
