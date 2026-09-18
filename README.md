@@ -291,6 +291,45 @@ then crawl, and `bench/README.md` has the instrumented reason — an unnormalise
 metre from an obstacle, which is the pathology this repo's own C++ controller
 was fixed for.
 
+#### The same seven, on the robot
+
+A drawn field is still a drawing. `RACE_FIELD=bench-py` and
+`RACE_FIELD=bench-cpp` put these implementations on TurtleBot 4s in Gazebo --
+same robot, same costmap settings, same reference path, every lane released in
+the same instant, each implementation's own scoring function choosing the
+commands. The C and C++ three run `bench/baseline_*.cpp`'s `step_*`, which is
+the same per-tick function the figures above loop over, so a clip and a figure
+cannot quietly diverge.
+
+![this repo's DWA against the two reference Python implementations](sim/gif/race-chicane-bench-py.gif)
+
+![this repo's C++ DWA against the three C and C++ baselines](sim/gif/race-chicane-bench-cpp.gif)
+
+| field | controller | finished |
+| --- | --- | --- |
+| bench-py | dwa-py | 13.9 s, 6.03 m |
+| bench-py | dwa-c++ | 13.9 s, 5.99 m |
+| bench-py | PythonRobotics | did not cross: 0.32 m of 5.80 |
+| bench-py | kmilo7204 | did not cross: 0.32 m of 5.80 |
+| bench-cpp | dwa-c++ | 14.0 s, 5.97 m |
+| bench-cpp | amslabtech | 23.4 s, 5.87 m |
+| bench-cpp | CppRobotics | 96.2 s, 5.80 m |
+| bench-cpp | goktug97 | did not cross: 0.09 m of 5.80 |
+
+The C and C++ half comes out in the drawn figure's order — amslabtech arrives,
+CppRobotics a long way behind it, goktug97 not at all — off a different plant,
+different obstacles and a different goal, which is the cross-check.
+
+The Python half does not, and that is the more useful half. Both references
+arrive in the drawn field, and in a 1.10 m corridor neither manages a third of
+a metre. Eighteen blocks scattered in a 12 m square leave room to swing wide of
+everything; a chicane does not, and `calc_obstacle_cost` returning an
+unnormalised `1 / min_r` at gain 1.0 — against `to_goal_cost_gain` 0.15 and
+`speed_cost_gain` 1.0, all three theirs — is worth several times the other two
+terms combined once a wall is half a metre away. What each is handed, and the
+one arrangement of it that was tried and measured worse, is in
+[`sim/README.md`](sim/README.md).
+
 ### Global planner vs Nav2
 
 Reference numbers are Table I of Macenski et al., [*Cost-Aware Kinematically

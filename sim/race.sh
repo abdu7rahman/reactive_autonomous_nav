@@ -253,12 +253,39 @@ if [ -n "$LAST" ]; then
   echo "    last finisher at ${LAST}s sim; trimming the capture at ${END}s"
 fi
 
+# A long race gets a smaller frame and a shorter palette, because a race is
+# as long as its slowest finisher and the file should not be.
+#
+# The bench-cpp field ran 96.2 simulated seconds -- CppRobotics crawls the
+# whole course -- which is 100 s of gif against 15 to 51 for every other race
+# here, and it encoded to 11.6 MB against their 3.0 to 5.7. Measured, four
+# ways, on that clip:
+#
+#   fps 8 -> 4, at 560 and 64 colours     11.6 -> 8.4 MB
+#   64 -> 32 colours, at 560 and 6 fps    10.2 -> 7.9 MB
+#   560 -> 480 px,    at 64 and 6 fps     10.2 -> 7.5 MB
+#   6 fps, 480 px, 32 colours                     5.7 MB
+#
+# Halving the frame count buys 28 percent, which says the cost is not the
+# number of frames: five robots, five trails and a rolling costmap mean almost
+# every pixel changes between frames, so each one is close to a keyframe and
+# the inter-frame compression a gif has is not worth much. The pixels and the
+# palette are what pay. 5.7 MB is the band the other race clips already sit
+# in, and the trails stay four distinguishable colours at 32 -- checked on a
+# frame, not assumed.
+#
+# 60 s is the threshold because every clip that is not this one is under it.
+PLAY=$(python3 -c "print(f'{${END:-0} / $SPEED:.0f}')" 2>/dev/null || echo 0)
+FPS=8; WIDE=560; COLS=64
+if [ "${PLAY:-0}" -gt 60 ]; then FPS=6; WIDE=480; COLS=32; fi
+echo "    ${PLAY}s of gif at ${FPS} fps, ${WIDE} px, ${COLS} colours"
+
 # crop before scale: the capture window starts one pixel inside RViz's 3D
 # viewport, which puts its left and right dock-splitter handles in the frame --
 # a few coloured pixels at each edge of the gif, at the middle height, that
 # look like world geometry and are not.  16 px off each side and 8 off the
 # bottom clears them and costs nothing at the ends of the course.
 ffmpeg -loglevel error -y $TRIM -i "$RUN/$TAG.ts" -vf \
-  "crop=880:616:16:0,setpts=PTS/$SPEED,fps=8,scale=560:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=64[p];[s1][p]paletteuse=dither=none" \
+  "crop=880:616:16:0,setpts=PTS/$SPEED,fps=$FPS,scale=$WIDE:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=$COLS[p];[s1][p]paletteuse=dither=none" \
   -loop 0 "$G/gif/$TAG.gif" < /dev/null
 ls -la "$G/gif/$TAG.gif" 2>/dev/null | awk '{printf "    gif %.1f MB\n", $5/1048576}'

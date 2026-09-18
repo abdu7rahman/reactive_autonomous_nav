@@ -431,6 +431,53 @@ a path tracker, correctly, because routing round a blockage is the global
 planner's job; and a parked obstacle freezes a stale route's waypoint index, so
 all three orbited it at 0.5 m for the rest of the run.
 
+### And the same seven in the simulator
+
+A drawn field is still a drawing: one plant, one obstacle list, one process.
+`RACE_FIELD=bench-py` and `RACE_FIELD=bench-cpp` in `sim/` put the same seven
+on TurtleBot 4s in Gazebo -- same robot, same nav2_costmap_2d settings, same
+reference path, every lane released in the same instant, each implementation's
+own scoring function choosing the commands from its own lidar and costmap.
+
+The C and C++ three call `baseline_*.cpp`'s `step_*`, which is the per-tick
+function `trace_*` loops over here, so the clip and the figure above cannot
+diverge below that call. The Python two are loaded by `baselines_py.py`, which
+is the same loader `dwa_compare.py` uses.
+
+| field | controller | finished |
+| --- | --- | --- |
+| bench-py | dwa-py | 13.9 s, 6.03 m |
+| bench-py | dwa-c++ | 13.9 s, 5.99 m |
+| bench-py | PythonRobotics | did not cross: 0.32 m of 5.80 |
+| bench-py | kmilo7204 | did not cross: 0.32 m of 5.80 |
+| bench-cpp | dwa-c++ | 14.0 s, 5.97 m |
+| bench-cpp | amslabtech | 23.4 s, 5.87 m |
+| bench-cpp | CppRobotics | 96.2 s, 5.80 m |
+| bench-cpp | goktug97 | did not cross: 0.09 m of 5.80 |
+
+The C and C++ order is this page's order -- amslabtech arrives, CppRobotics is
+far behind it, goktug97 does not get there -- reached through a different
+plant, different obstacles and a different goal.
+
+The Python pair is where the two disagree, and the disagreement is the
+finding. Both arrive on the drawn field, at seed 7 in 55.0 s over 19.16 m and
+71.4 s over 18.70 m, and neither reaches a third of a metre of a 5.80 m
+chicane. Their scoring says why: `calc_obstacle_cost` returns an unnormalised
+`1 / min_r` at `obstacle_cost_gain` 1.0, against `to_goal_cost_gain` 0.15 and
+`speed_cost_gain` 1.0 -- all three their own defaults -- so with a wall half a
+metre away the obstacle term is worth several times the whole of the other
+two, the command that maximises clearance wins, and standing still maximises
+clearance. PythonRobotics then reads `|v| < 0.001` as stuck and commands
+`-max_delta_yaw_rate`, which is a spin in place that does not change anything
+it is scoring. Eighteen blocks in a 12 m square leave room to swing wide of
+all of it; a 1.10 m corridor does not.
+
+This is the same shape as the pathology recorded for the C and C++ side above,
+and it is the one this repo's own controller was fixed for.
+
+`sim/README.md` has the clips, the two decisions about what a goal seeker is
+handed on a tracking course, and the arrangement of them that measured worse.
+
 ## Global planner vs Nav2
 
 Reference is Table I of Macenski et al., [*Cost-Aware Kinematically Feasible
