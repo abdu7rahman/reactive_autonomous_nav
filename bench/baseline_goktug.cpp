@@ -107,7 +107,7 @@ static float TRACE_HALFWIDTH = -1.0f;   // < 0 means in.radius
 void trace_goktug_gain(float g) { TRACE_CLEARANCE = g; }
 void trace_goktug_footprint(float h) { TRACE_HALFWIDTH = h; }
 
-void trace_goktug(const TraceIn& in, TraceOut& out) {
+void step_goktug(const StepIn& in, StepOut& out) {
     Config gc;
     gc.maxSpeed = (float)in.top_speed;
     gc.minSpeed = 0.0f;
@@ -129,46 +129,56 @@ void trace_goktug(const TraceIn& in, TraceOut& out) {
         pc->points[i].y = (float)in.oby[i];
     }
     Point goal = {(float)in.gx, (float)in.gy};
+    Pose p = {{(float)in.x, (float)in.y}, (float)in.yaw};
+    Velocity vel = {(float)in.v, (float)in.w};
 
+    DynamicWindow* dw = NULL;
+    createDynamicWindow(vel, gc, &dw);
+    out.rolls = (double)dw->nPossibleV * (double)dw->nPossibleW;
+    freeDynamicWindow(dw);
+
+    auto t0 = std::chrono::steady_clock::now();
+    Velocity u = planning(p, vel, goal, pc, gc);
+    out.ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    // planning() initialises total_cost to FLT_MAX and keeps a candidate only
+    // on `cost < total_cost`, so when every candidate collides -- every
+    // clearance cost is FLT_MAX -- bestVelocity is returned uninitialised.
+    // Reading it is undefined; in practice it came back zero and the trail
+    // stopped dead at (3.27, 3.26) with an obstacle 1.04 m away and no
+    // movement for the remaining 86 s.  Turning in place instead is the
+    // recovery the amslabtech step gives its own node for the same case, so
+    // both get it rather than one.
+    out.v = u.linearVelocity;
+    out.w = u.angularVelocity;
+    bool any = false;
+    DynamicWindow* adm = NULL;
+    createDynamicWindow(vel, gc, &adm);
+    for (int i = 0; i < adm->nPossibleV && !any; i++)
+        for (int j = 0; j < adm->nPossibleW && !any; j++) {
+            Velocity pv = {adm->possibleV[i], adm->possibleW[j]};
+            if (calculateClearanceCost(p, pv, pc, gc) < FLT_MAX) any = true;
+        }
+    freeDynamicWindow(adm);
+    if (!any) { out.v = 0.0; out.w = in.max_yaw; }
+    freePointCloud(pc);
+}
+
+void trace_goktug(const TraceIn& in, TraceOut& out) {
     TraceState s{in.sx, in.sy, in.syaw, 0.0, 0.0};
     std::vector<double> ms, rolls;
     out.xy = { s.x, s.y };
     for (int k = 0; k < in.max_steps; k++) {
-        Pose p = {{(float)s.x, (float)s.y}, (float)s.yaw};
-        Velocity vel = {(float)s.v, (float)s.w};
-        DynamicWindow* dw = NULL;
-        createDynamicWindow(vel, gc, &dw);
-        rolls.push_back((double)dw->nPossibleV * (double)dw->nPossibleW);
-        freeDynamicWindow(dw);
-        auto t0 = std::chrono::steady_clock::now();
-        Velocity u = planning(p, vel, goal, pc, gc);
-        ms.push_back(std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - t0).count());
-        // planning() initialises total_cost to FLT_MAX and keeps a candidate
-        // only on `cost < total_cost`, so when every candidate collides --
-        // every clearance cost is FLT_MAX -- bestVelocity is returned
-        // uninitialised.  Reading it is undefined; in practice it came back
-        // zero and the trail stopped dead at (3.27, 3.26) with an obstacle
-        // 1.04 m away and no movement for the remaining 86 s.  Turning in
-        // place instead is the recovery the amslabtech trace gives its own
-        // node for the same case, so both get it rather than one.
-        double bv = u.linearVelocity, bw = u.angularVelocity;
-        bool any = false;
-        DynamicWindow* adm = NULL;
-        createDynamicWindow(vel, gc, &adm);
-        for (int i = 0; i < adm->nPossibleV && !any; i++)
-            for (int j = 0; j < adm->nPossibleW && !any; j++) {
-                Velocity pv = {adm->possibleV[i], adm->possibleW[j]};
-                if (calculateClearanceCost(p, pv, pc, gc) < FLT_MAX) any = true;
-            }
-        freeDynamicWindow(adm);
-        if (!any) { bv = 0.0; bw = in.max_yaw; }
-        s = trace_step(s, bv, bw, in);
+        StepOut u;
+        step_goktug(trace_to_step(in, s, in.gx, in.gy), u);
+        ms.push_back(u.ms);
+        rolls.push_back(u.rolls);
+        s = trace_step(s, u.v, u.w, in);
         out.xy.push_back(s.x);
         out.xy.push_back(s.y);
         if (trace_arrived(s, in)) break;
     }
-    freePointCloud(pc);
     out.ms = trace_median(ms);
     out.rolls = trace_median(rolls);
 }

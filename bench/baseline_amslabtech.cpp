@@ -223,7 +223,7 @@ double bench_amslabtech(int side, int reps, const BenchField& f, BenchWork* w) {
 // overwritten here, or its window would be a fifth as wide as everyone
 // else's.  robot_radius_ likewise: its 0.17 plus 0.01 of padding against the
 // 0.47 the others are given.
-void trace_amslabtech(const TraceIn& in, TraceOut& out) {
+void step_amslabtech(const StepIn& in, StepOut& out) {
     using namespace ams;
     sim_time_samples_ = in.steps;
     predict_time_ = in.steps * in.dt;
@@ -236,44 +236,55 @@ void trace_amslabtech(const TraceIn& in, TraceOut& out) {
     max_d_yawrate_ = in.acc_w;
     robot_radius_ = in.radius - footprint_padding_;
 
+    // Its rollouts start from a zero state, so the obstacles and the goal
+    // have to be in the base frame.
+    const double c = std::cos(-in.yaw), sn = std::sin(-in.yaw);
+    obs_list_.poses.clear();
+    for (int i = 0; i < in.nob; i++) {
+        const double dx = in.obx[i] - in.x, dy = in.oby[i] - in.y;
+        obs_list_.poses.push_back(
+            Pose{Point{dx * c - dy * sn, dx * sn + dy * c, 0.0}});
+    }
+    const double gdx = in.gx - in.x, gdy = in.gy - in.y;
+    const Vector3d goal(gdx * c - gdy * sn, gdx * sn + gdy * c, 0.0);
+    current_cmd_vel_.linear.x = in.v;
+    current_cmd_vel_.angular.z = in.w;
+
+    const Window dw = calc_dynamic_window();
+    double bv = 0.0, bw = 0.0, best = 1e18;
+    int n = 0;
+    auto t0 = std::chrono::steady_clock::now();
+    for (double v = dw.min_velocity_; v <= dw.max_velocity_; v += in.vres) {
+        for (double w = dw.min_yawrate_; w <= dw.max_yawrate_; w += in.wres) {
+            std::vector<State> traj = generate_trajectory(v, w);
+            Cost cost = evaluate_trajectory(traj, goal);
+            cost.calc_total_cost();
+            n++;
+            if (cost.total_cost_ < best) { best = cost.total_cost_; bv = v; bw = w; }
+        }
+    }
+    out.ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    out.rolls = (double)n;
+    // Its node's own recovery when nothing is admissible: turn in place.
+    // Without it a run that meets an obstacle head on stops there, and the
+    // trail would report a stall that is the harness leaving out half the
+    // node rather than anything about its scoring.
+    if (best >= 1e6) { bv = 0.0; bw = in.max_yaw; }
+    out.v = bv;
+    out.w = bw;
+}
+
+void trace_amslabtech(const TraceIn& in, TraceOut& out) {
     TraceState s{in.sx, in.sy, in.syaw, 0.0, 0.0};
     std::vector<double> ms, rolls;
     out.xy = { s.x, s.y };
     for (int k = 0; k < in.max_steps; k++) {
-        const double c = std::cos(-s.yaw), sn = std::sin(-s.yaw);
-        obs_list_.poses.clear();
-        for (int i = 0; i < in.nob; i++) {
-            const double dx = in.obx[i] - s.x, dy = in.oby[i] - s.y;
-            obs_list_.poses.push_back(
-                Pose{Point{dx * c - dy * sn, dx * sn + dy * c, 0.0}});
-        }
-        const double gdx = in.gx - s.x, gdy = in.gy - s.y;
-        const Vector3d goal(gdx * c - gdy * sn, gdx * sn + gdy * c, 0.0);
-        current_cmd_vel_.linear.x = s.v;
-        current_cmd_vel_.angular.z = s.w;
-
-        const Window dw = calc_dynamic_window();
-        double bv = 0.0, bw = 0.0, best = 1e18;
-        int n = 0;
-        auto t0 = std::chrono::steady_clock::now();
-        for (double v = dw.min_velocity_; v <= dw.max_velocity_; v += in.vres) {
-            for (double w = dw.min_yawrate_; w <= dw.max_yawrate_; w += in.wres) {
-                std::vector<State> traj = generate_trajectory(v, w);
-                Cost cost = evaluate_trajectory(traj, goal);
-                cost.calc_total_cost();
-                n++;
-                if (cost.total_cost_ < best) { best = cost.total_cost_; bv = v; bw = w; }
-            }
-        }
-        ms.push_back(std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - t0).count());
-        rolls.push_back((double)n);
-        // Its node's own recovery when nothing is admissible: turn in place.
-        // Without it a run that meets an obstacle head on stops there, and
-        // the trail would report a stall that is the harness leaving out half
-        // the node rather than anything about its scoring.
-        if (best >= 1e6) { bv = 0.0; bw = in.max_yaw; }
-        s = trace_step(s, bv, bw, in);
+        StepOut u;
+        step_amslabtech(trace_to_step(in, s, in.gx, in.gy), u);
+        ms.push_back(u.ms);
+        rolls.push_back(u.rolls);
+        s = trace_step(s, u.v, u.w, in);
         out.xy.push_back(s.x);
         out.xy.push_back(s.y);
         if (trace_arrived(s, in)) break;

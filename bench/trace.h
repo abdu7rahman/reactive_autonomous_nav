@@ -80,6 +80,35 @@ struct TraceIn {
     int max_steps = 900;
 };
 
+// One tick of somebody else's controller: where the robot is, what it can
+// see, where it is being asked to go, and the command that comes back. The
+// trace loops below are a loop over this, and so is the live race --
+// cpp/src/baseline_controller.cpp hosts these three in a ROS 2 node and
+// drives a TurtleBot 4 in Gazebo with them, so the clip and the figure are
+// the same code choosing the same way. Splitting it out is what makes that
+// true rather than claimed: the per-tick body existed three times over, once
+// inside each trace_*, and a fourth copy in a node is how a race quietly
+// stops being the benchmark it is captioned as.
+struct StepIn {
+    const double* obx = nullptr;   // obstacle centres, in the frame x/y are in
+    const double* oby = nullptr;
+    int nob = 0;
+    double x = 0, y = 0, yaw = 0;  // where the robot is
+    double v = 0, w = 0;           // and how it is moving, for the window
+    double gx = 0, gy = 0;         // the point it is being asked to drive at
+    double dt = 0.1;
+    int steps = 25;
+    double top_speed = 0.5, max_yaw = 2.0, acc_v = 0.9, acc_w = 7.725;
+    double vres = 0.02, wres = 0.04;
+    double radius = 0.47;          // clearance, obstacle included
+};
+
+struct StepOut {
+    double v = 0, w = 0;           // the command
+    double ms = 0;                 // what choosing it cost
+    double rolls = 0;              // and how many trajectories it scored
+};
+
 struct TraceOut {
     std::vector<double> xy;        // x0,y0,x1,y1,... in the map frame
     double ms = 0.0;               // median per tick
@@ -101,6 +130,23 @@ inline TraceState trace_step(const TraceState& s, double v, double w,
                        s.yaw + w * in.dt, v, w };
 }
 
+// A trace's tick, as the step the live node takes. Everything in StepIn that
+// is not the state comes straight off the TraceIn, so a trace and a race are
+// the same call with the same tuning.
+inline StepIn trace_to_step(const TraceIn& in, const TraceState& s,
+                            double gx, double gy) {
+    StepIn st;
+    st.obx = in.obx; st.oby = in.oby; st.nob = in.nob;
+    st.x = s.x; st.y = s.y; st.yaw = s.yaw; st.v = s.v; st.w = s.w;
+    st.gx = gx; st.gy = gy;
+    st.dt = in.dt; st.steps = in.steps;
+    st.top_speed = in.top_speed; st.max_yaw = in.max_yaw;
+    st.acc_v = in.acc_v; st.acc_w = in.acc_w;
+    st.vres = in.vres; st.wres = in.wres;
+    st.radius = in.radius;
+    return st;
+}
+
 inline bool trace_arrived(const TraceState& s, const TraceIn& in) {
     return std::hypot(s.x - in.gx, s.y - in.gy) < in.goal_tol;
 }
@@ -115,6 +161,10 @@ inline double trace_median(std::vector<double>& v) {
 double bench_cpprobotics(int side, int reps, const BenchField& f, BenchWork* w);
 double bench_goktug(int side, int reps, const BenchField& f, BenchWork* w);
 double bench_amslabtech(int side, int reps, const BenchField& f, BenchWork* w);
+
+void step_cpprobotics(const StepIn& in, StepOut& out);
+void step_goktug(const StepIn& in, StepOut& out);
+void step_amslabtech(const StepIn& in, StepOut& out);
 
 void trace_cpprobotics(const TraceIn& in, TraceOut& out);
 // goktug97 ships no default gains, so its clearance gain is a harness choice
