@@ -6,19 +6,24 @@
 #include <random>
 #include <vector>
 #include "trace.h"
+#include <limits>
 
-double bench_cpprobotics(int side, int reps, int n_obstacles) {
+double bench_cpprobotics(int side, int reps, const BenchField& f, BenchWork* w) {
     Config cfg;
-    cfg.dt = 0.1f; cfg.predict_time = 2.5f;
+    cfg.dt = (float)f.dt; cfg.predict_time = (float)f.predict_time;
+    cfg.max_speed = (float)f.max_speed; cfg.min_speed = 0.0f;
+    cfg.max_yawrate = (float)f.max_yaw;
     cfg.v_reso = (cfg.max_speed - cfg.min_speed) / (side - 1);
     cfg.yawrate_reso = (2 * cfg.max_yawrate) / (side - 1);
     cfg.max_accel = 1e6f; cfg.max_dyawrate = 1e6f;
-    State x{{1.0f, 1.0f, 0.0f, 0.0f, 0.0f}};
-    Point goal{{5.0f, 5.0f}};
-    std::mt19937 rng(7);
-    std::uniform_real_distribution<double> U(0.0, 10.0);
+    // The clearance was its own 1.0 m default, which on this field puts an
+    // obstacle inside the robot at every start pose: see BenchField.
+    cfg.robot_radius = (float)f.radius;
+    State x{{(float)f.sx, (float)f.sy, (float)f.syaw, 0.0f, 0.0f}};
+    Point goal{{(float)f.gx, (float)f.gy}};
     Obstacle ob;
-    for (int i = 0; i < n_obstacles; i++) ob.push_back({{(float)U(rng), (float)U(rng)}});
+    for (int i = 0; i < f.nob; i++)
+        ob.push_back({{(float)f.obx[i], (float)f.oby[i]}});
     Window dw = calc_dynamic_window(x, cfg);
     { Control u{0, 0}; calc_final_input(x, u, dw, cfg, goal, ob); }
     std::vector<double> t;
@@ -28,6 +33,30 @@ double bench_cpprobotics(int side, int reps, int n_obstacles) {
         calc_final_input(x, u, dw, cfg, goal, ob);
         t.push_back(std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - t0).count());
+    }
+    if (w) {
+        long long pts = 0, chk = 0, bail = 0, traj = 0;
+        for (float v = dw[0]; v <= dw[1]; v += cfg.v_reso)
+            for (float y = dw[2]; y <= dw[3]; y += cfg.yawrate_reso) {
+                Traj tr = calc_trajectory(x, v, y, cfg);
+                traj++;
+                bool hit = false;
+                for (unsigned ii = 0; ii < tr.size() && !hit; ii += 2) {
+                    pts++;
+                    for (unsigned i = 0; i < ob.size(); i++) {
+                        chk++;
+                        const float dx = tr[ii][0] - ob[i][0];
+                        const float dy = tr[ii][1] - ob[i][1];
+                        if (std::sqrt(dx * dx + dy * dy) <= cfg.robot_radius) {
+                            hit = true; bail++; break;
+                        }
+                    }
+                }
+                (void)0;
+            }
+        w->points = (double)pts / traj;
+        w->checks = (double)chk / traj;
+        w->bailed = (double)bail / traj;
     }
     std::sort(t.begin(), t.end());
     return t[t.size() / 2];

@@ -140,18 +140,26 @@ static Cost evaluate_trajectory(const std::vector<State>& trajectory, const Vect
 }  // namespace ams
 
 // ── the harness ─────────────────────────────────────────────────────
-double bench_amslabtech(int side, int reps, int n_obstacles) {
+double bench_amslabtech(int side, int reps, const BenchField& f, BenchWork* w) {
     using namespace ams;
-    std::mt19937 rng(7);
-    std::uniform_real_distribution<double> U(0.0, 6.0);
+    // Its rollouts start from a zero state and calc_obs_cost measures against
+    // obs_list_, so the field goes in relative to the start pose -- the same
+    // base-frame transform trace_amslabtech makes, for the same reason.
     obs_list_.poses.clear();
-    for (int i = 0; i < n_obstacles; i++) obs_list_.poses.push_back(Pose{Point{U(rng), U(rng), 0.0}});
-    current_cmd_vel_.linear.x = 0.25;
+    for (int i = 0; i < f.nob; i++)
+        obs_list_.poses.push_back(Pose{Point{f.obx[i] - f.sx,
+                                             f.oby[i] - f.sy, 0.0}});
+    current_cmd_vel_.linear.x = 0.0;
     current_cmd_vel_.angular.z = 0.0;
-    sim_time_samples_ = (int)(predict_time_ / 0.1);
+    predict_time_ = f.predict_time;
+    sim_period_ = f.dt;
+    sim_time_samples_ = (int)(f.predict_time / f.dt);
+    target_velocity_ = f.max_speed;
+    min_velocity_ = 0.0;
+    max_yawrate_ = f.max_yaw;
+    robot_radius_ = f.radius - footprint_padding_;
 
-    // the same window this repo is given, sampled the same number of times
-    const Vector3d goal(5.0, 5.0, 0.0);
+    const Vector3d goal(f.gx - f.sx, f.gy - f.sy, 0.0);
     double best_total = 0.0;
     auto t0 = std::chrono::steady_clock::now();
     for (int r = 0; r < reps; r++) {
@@ -159,8 +167,9 @@ double bench_amslabtech(int side, int reps, int n_obstacles) {
         for (int i = 0; i < side; i++) {
             const double v = target_velocity_ * i / std::max(1, side - 1);
             for (int j = 0; j < side; j++) {
-                const double w = -max_yawrate_ + 2.0 * max_yawrate_ * j / std::max(1, side - 1);
-                std::vector<State> traj = generate_trajectory(v, w);
+                const double yr = -max_yawrate_
+                                + 2.0 * max_yawrate_ * j / std::max(1, side - 1);
+                std::vector<State> traj = generate_trajectory(v, yr);
                 Cost c = evaluate_trajectory(traj, goal);
                 c.calc_total_cost();
                 if (c.total_cost_ < best) best = c.total_cost_;
@@ -170,6 +179,33 @@ double bench_amslabtech(int side, int reps, int n_obstacles) {
     }
     auto t1 = std::chrono::steady_clock::now();
     (void)best_total;
+    if (w) {
+        long long pts = 0, chk = 0, bail = 0, traj = 0;
+        for (int i = 0; i < side; i++) {
+            const double v = target_velocity_ * i / std::max(1, side - 1);
+            for (int j = 0; j < side; j++) {
+                const double yr = -max_yawrate_
+                                + 2.0 * max_yawrate_ * j / std::max(1, side - 1);
+                std::vector<State> tr = generate_trajectory(v, yr);
+                traj++;
+                bool hit = false;
+                for (const auto& st : tr) {
+                    if (hit) break;
+                    pts++;
+                    for (const auto& o : obs_list_.poses) {
+                        chk++;
+                        const double d = hypot(st.x_ - o.position.x,
+                                               st.y_ - o.position.y)
+                                       - robot_radius_ - footprint_padding_;
+                        if (d < DBL_EPSILON) { hit = true; bail++; break; }
+                    }
+                }
+            }
+        }
+        w->points = (double)pts / traj;
+        w->checks = (double)chk / traj;
+        w->bailed = (double)bail / traj;
+    }
     return std::chrono::duration<double, std::milli>(t1 - t0).count() / reps;
 }
 

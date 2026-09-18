@@ -30,6 +30,36 @@ inline std::string trace_author() {
     return out;
 }
 
+// One field for the timing comparison, so that all four evaluate the same
+// geometry.  They did not: each baseline's obstacle cost returns on the first
+// rollout point inside its own clearance radius, and the harness left
+// CppRobotics' robot_radius at its 1.0 m default against 60 obstacles in a
+// 10 x 10 m square, so every trajectory it scored was in collision at its
+// first point -- measured, 1.0 rollout point and 15.0 obstacle checks per
+// trajectory, 100 percent bailing immediately, against 24.8 of 25 steps for
+// this repo.  The published column was timing one point against twenty-five.
+//
+// The field is the same 0.5 m square blocks this repo's costmap rasterises,
+// handed to the baselines as their centres with a radius of half a block, and
+// placed in the same 20 x 20 m space.  bench_work() reports what each one then
+// evaluates, so the comparison cannot silently go lopsided again.
+struct BenchField {
+    const double* obx = nullptr;
+    const double* oby = nullptr;
+    int nob = 0;
+    double radius = 0.25;          // half a block; their centre-to-centre test
+    double sx = 1.0, sy = 1.0, syaw = 0.0;
+    double gx = 15.0, gy = 15.0;
+    double max_speed = 0.5, max_yaw = 2.0, dt = 0.1, predict_time = 2.5;
+};
+
+// What a timing row actually evaluated, per trajectory.
+struct BenchWork {
+    double points = 0;             // rollout points scored
+    double checks = 0;             // obstacle distance tests
+    double bailed = 0;             // fraction that stopped on a collision
+};
+
 struct TraceIn {
     const double* obx = nullptr;   // obstacle centres
     const double* oby = nullptr;
@@ -81,6 +111,10 @@ inline double trace_median(std::vector<double>& v) {
     std::nth_element(v.begin(), v.begin() + k, v.end());
     return v[k];
 }
+
+double bench_cpprobotics(int side, int reps, const BenchField& f, BenchWork* w);
+double bench_goktug(int side, int reps, const BenchField& f, BenchWork* w);
+double bench_amslabtech(int side, int reps, const BenchField& f, BenchWork* w);
 
 void trace_cpprobotics(const TraceIn& in, TraceOut& out);
 // goktug97 ships no default gains, so its clearance gain is a harness choice

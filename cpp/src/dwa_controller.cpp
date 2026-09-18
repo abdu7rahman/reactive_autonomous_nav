@@ -37,6 +37,11 @@ static constexpr uint8_t WARN_COST   = 80;
 // How near the lookahead waypoint counts as reaching it, for the heading
 // term above.  dwa_controller.py's wp_tol.
 static constexpr double  WP_TOL      = 0.25;
+// Precomputed once rather than per rollout step.  The scoring loop runs
+// steps * trajectories times a tick -- 25 * 420 at the shipped resolutions --
+// so a division in it is ten thousand divisions a tick.
+static constexpr double  WP_TOL2     = WP_TOL * WP_TOL;
+static constexpr double  PEN_SCALE   = 1.0 / (double)(LETHAL_COST - WARN_COST);
 
 // HSV → RGB, full saturation & value, h in [0,1]
 static std::array<float,3> hsv_to_rgb(float h)
@@ -113,6 +118,10 @@ public:
         // 3 oscillates across open rooms, 12 is 74% slower in a maze, 16
         // never finishes one -- and this is the same method on the same plans.
         lookahead_wps_ = declare_parameter("lookahead_wps", 8);
+        // How many of the fan to draw.  dwa_controller.py's own default, and
+        // for its reason: past a few dozen the picture is a grey smear and the
+        // markers cost more than the search.
+        traj_draw_     = declare_parameter("traj_draw", 48);
         goal_tol_      = declare_parameter("goal_tol",      0.15);
 
         auto qos_map = rclcpp::QoS(1).transient_local().reliable();
@@ -152,6 +161,7 @@ private:
     double vel_res_, yawrate_res_, predict_time_, dt_;
     double heading_gain_, speed_gain_, obstacle_gain_, goal_tol_;
     int    lookahead_wps_;
+    int    traj_draw_;
     std::string map_frame_, base_frame_;
 
     // ── state ─────────────────────────────────────────────────────────────────
@@ -244,8 +254,12 @@ private:
     {
         if (!local_map_) return 0;
         const auto& info = local_map_->info;
-        int gx = (int)((wx - info.origin.position.x) / info.resolution);
-        int gy = (int)((wy - info.origin.position.y) / info.resolution);
+        // Multiply by the reciprocal rather than divide: the same index, and a
+        // divide is about twenty cycles against four for a multiply on this
+        // core, twice per rollout point.
+        const double inv = 1.0 / info.resolution;
+        int gx = (int)((wx - info.origin.position.x) * inv);
+        int gy = (int)((wy - info.origin.position.y) * inv);
         if (gx < 0 || gy < 0 || gx >= (int)info.width || gy >= (int)info.height) return 0;
         return static_cast<uint8_t>(local_map_->data[gy * (int)info.width + gx]);
     }
@@ -430,38 +444,73 @@ private:
         // controller uses, and bench/test_dwa_window.py is the gate on it.
         const std::vector<double> vs = samples(v_min, v_max, vel_res_);
         const std::vector<double> ws = samples(w_min, w_max, yawrate_res_);
-        for (double v : vs) {
-            for (double w : ws) {
-                // simulate trajectory
-                RobotState cur = s;
-                bool collision = false;
+
+        // Only a stride of the fan is drawn, which is also the only reason to
+        // build a trajectory's points at all.  This controller had no cap: it
+        // built a LINE_STRIP of twenty-five geometry_msgs Points for every
+        // kept trajectory and published all of them, about 420 markers and
+        // 10,500 Point constructions a tick, for a picture that is a grey
+        // smear past a few dozen lines. dwa_controller.py caps at 48 in one
+        // place with that reasoning in a comment beside it; this is the same
+        // cap, and it is applied before the rollout so the points are never
+        // built rather than built and dropped.
+        const size_t n_total = vs.size() * ws.size();
+        const size_t stride  = std::max<size_t>(1, n_total / (size_t)traj_draw_);
+        size_t traj_index = 0;
+
+        // cos and sin of the heading are advanced by one rotation per step
+        // rather than recomputed from the angle: for a constant w the heading
+        // turns by w * dt every step, so (c, s) <- (c cw - s sw, s cw + c sw)
+        // with cw and sw computed once per trajectory. That removes two
+        // transcendental calls per rollout step -- fifty per trajectory at a
+        // 25-step horizon, twenty-one thousand a tick -- and is the same
+        // arithmetic: bench/dwa_compare_cpp.cpp's mine_pick_check() runs both
+        // forms over 1,944 states and reports the same chosen command in every
+        // one of them, worst velocity difference 0, worst score difference
+        // 2.6e-14. Measured on the same window, the four changes together are
+        // 4.1x at 42 trajectories, 4.4x at 420 and 4.5x at 2,550.
+        const double c0 = std::cos(s.yaw), s0 = std::sin(s.yaw);
+        for (double w : ws) {
+            const double cw = std::cos(w * dt_), sw = std::sin(w * dt_);
+            for (double v : vs) {
+                const bool draw = (traj_index++ % stride) == 0;
+                const double adv = v * dt_;
+                double px = s.x, py = s.y, pyaw = s.yaw, c = c0, sn = s0;
+                double ax = s.x, ay = s.y, ayaw = s.yaw;
+                bool collision = false, arrived = false;
                 double pen_sum = 0.0;      // inflated-cost penalty, summed
-                RobotState arrive = s;     // where it reaches the waypoint
-                bool arrived = false;
+                int kept = 0;
 
                 std::vector<geometry_msgs::msg::Point> traj_pts;
-                traj_pts.reserve(steps);
+                if (draw) traj_pts.reserve(steps);
 
                 for (int i = 0; i < steps; i++) {
-                    cur = motion(cur, v, w);
-                    uint8_t cost = costmap_lookup(cur.x, cur.y);
+                    px += adv * c;
+                    py += adv * sn;
+                    const double nc = c * cw - sn * sw;
+                    sn = sn * cw + c * sw;
+                    c  = nc;
+                    pyaw += w * dt_;
+                    const uint8_t cost = costmap_lookup(px, py);
                     if (cost >= LETHAL_COST) { collision = true; break; }
-                    if (cost > WARN_COST) {
-                        pen_sum += (double)(cost - WARN_COST)
-                                 / (double)(LETHAL_COST - WARN_COST);
+                    if (cost > WARN_COST)
+                        pen_sum += (double)(cost - WARN_COST) * PEN_SCALE;
+                    if (!arrived) {
+                        const double dx = px - lax, dy = py - lay;
+                        if (dx * dx + dy * dy <= WP_TOL2) {
+                            ax = px; ay = py; ayaw = pyaw; arrived = true;
+                        }
                     }
-                    if (!arrived &&
-                        std::hypot(cur.x - lax, cur.y - lay) <= WP_TOL) {
-                        arrive = cur;
-                        arrived = true;
+                    if (draw) {
+                        geometry_msgs::msg::Point pt; pt.x = px; pt.y = py;
+                        traj_pts.push_back(pt);
                     }
-                    geometry_msgs::msg::Point p; p.x = cur.x; p.y = cur.y;
-                    traj_pts.push_back(p);
+                    kept++;
                 }
                 n_tried++;
-                if (collision || traj_pts.empty()) continue;
+                if (collision || !kept) continue;
                 n_kept++;
-                if (!arrived) arrive = cur;
+                if (!arrived) { ax = px; ay = py; ayaw = pyaw; }
 
                 // Scored where the trajectory arrives, not where it ends up,
                 // and on the same three terms the Python controller uses.
@@ -492,7 +541,7 @@ private:
                 // penalty now, capped at 10 and subtracted, which is what the
                 // gains beside it were chosen against.
                 double diff = angle_wrap(
-                    std::atan2(lay - arrive.y, lax - arrive.x) - arrive.yaw);
+                    std::atan2(lay - ay, lax - ax) - ayaw);
                 double h_score = 1.0 - std::abs(diff) / M_PI;
                 double o_cost  = std::min(10.0, pen_sum / steps * 10.0);
                 double s_score = v / max_vel_;
@@ -504,6 +553,8 @@ private:
                     best_score = total;
                     best_v = v; best_w = w;
                 }
+
+                if (!draw) continue;
 
                 // viz
                 const double max_possible = heading_gain_ + speed_gain_;

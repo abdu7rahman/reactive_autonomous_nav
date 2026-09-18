@@ -12,24 +12,25 @@ extern "C" {
 #include "trace.h"
 #include <cfloat>
 
-double bench_goktug(int side, int reps, int n_obstacles) {
+double bench_goktug(int side, int reps, const BenchField& f, BenchWork* w) {
     Config gc;
-    gc.maxSpeed = 0.5f; gc.minSpeed = 0.0f; gc.maxYawrate = 2.0f;
+    gc.maxSpeed = (float)f.max_speed; gc.minSpeed = 0.0f;
+    gc.maxYawrate = (float)f.max_yaw;
     gc.maxAccel = 1e6f; gc.maxdYawrate = 1e6f;
-    gc.velocityResolution = 0.5f / (side - 1);
-    gc.yawrateResolution  = 4.0f / (side - 1);
-    gc.dt = 0.1f; gc.predictTime = 2.5f;
+    gc.velocityResolution = (float)f.max_speed / (side - 1);
+    gc.yawrateResolution  = (float)(2 * f.max_yaw) / (side - 1);
+    gc.dt = (float)f.dt; gc.predictTime = (float)f.predict_time;
     gc.heading = 5.0f; gc.clearance = 5.0f; gc.velocity = 0.5f;
-    gc.base.xmin = -0.2f; gc.base.ymin = -0.2f;
-    gc.base.xmax = 0.2f;  gc.base.ymax = 0.2f;
-    Pose gp = {{1.0f, 1.0f}, 0.0f};
-    Velocity gv = {0.25f, 0.0f};
-    Point ggoal = {5.0f, 5.0f};
-    std::mt19937 rng(7);
-    std::uniform_real_distribution<double> U(0.0, 10.0);
-    PointCloud* pc = createPointCloud(n_obstacles);
-    for (int i = 0; i < n_obstacles; i++) {
-        pc->points[i].x = (float)U(rng); pc->points[i].y = (float)U(rng);
+    // Its footprint is a rectangle: the square with the same inradius as the
+    // disc the others are given, as trace_goktug's own sweep also uses.
+    gc.base.xmin = -(float)f.radius; gc.base.ymin = -(float)f.radius;
+    gc.base.xmax =  (float)f.radius; gc.base.ymax =  (float)f.radius;
+    Pose gp = {{(float)f.sx, (float)f.sy}, (float)f.syaw};
+    Velocity gv = {0.0f, 0.0f};
+    Point ggoal = {(float)f.gx, (float)f.gy};
+    PointCloud* pc = createPointCloud(f.nob);
+    for (int i = 0; i < f.nob; i++) {
+        pc->points[i].x = (float)f.obx[i]; pc->points[i].y = (float)f.oby[i];
     }
     planning(gp, gv, ggoal, pc, gc);
     std::vector<double> t;
@@ -39,17 +40,43 @@ double bench_goktug(int side, int reps, int n_obstacles) {
         t.push_back(std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - t0).count());
     }
+    if (w) {
+        DynamicWindow* dw = NULL;
+        createDynamicWindow(gv, gc, &dw);
+        long long pts = 0, chk = 0, bail = 0, traj = 0;
+        const int nsteps = (int)(gc.predictTime / gc.dt);
+        for (int i = 0; i < dw->nPossibleV; i++)
+            for (int j = 0; j < dw->nPossibleW; j++) {
+                Velocity pv = {dw->possibleV[i], dw->possibleW[j]};
+                Pose p = gp;
+                traj++;
+                bool hit = false;
+                for (int k = 0; k < nsteps && !hit; k++) {
+                    p = motion(p, pv, gc.dt);
+                    pts++;
+                    for (int o = 0; o < pc->size; o++) {
+                        chk++;
+                        const float dx = p.point.x - pc->points[o].x;
+                        const float dy = p.point.y - pc->points[o].y;
+                        const float lx = -dx * cosf(p.yaw) + -dy * sinf(p.yaw);
+                        const float ly =  dx * sinf(p.yaw) + -dy * cosf(p.yaw);
+                        if (lx <= gc.base.xmax && lx >= gc.base.xmin &&
+                            ly <= gc.base.ymax && ly >= gc.base.ymin) {
+                            hit = true; bail++; break;
+                        }
+                    }
+                }
+            }
+        freeDynamicWindow(dw);
+        w->points = (double)pts / traj;
+        w->checks = (double)chk / traj;
+        w->bailed = (double)bail / traj;
+    }
     freePointCloud(pc);
     std::sort(t.begin(), t.end());
     return t[t.size() / 2];
 }
 
-// planning() takes the pose, the velocity, the goal and a point cloud and
-// returns the velocity it chose, so the closed loop is its own function called
-// once a tick.  The cloud is the obstacle centres: it has no costmap, and
-// inflating them into one would be scoring a different implementation.  Its
-// footprint is the base rectangle rather than a radius, so the radius parity
-// the others get is applied as a square of the same half-width.
 // Its clearance gain is a harness choice, because it ships none: dwa.h's
 // Config is a plain C struct with no initialisers and its README documents the
 // field without a value.  Taking this repo's obstacle_gain of 5.0 for it, which

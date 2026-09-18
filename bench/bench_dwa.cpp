@@ -15,6 +15,10 @@
 #include <vector>
 
 static constexpr uint8_t LETHAL_COST = 253;
+static constexpr uint8_t WARN_COST   = 80;
+static constexpr double  WP_TOL      = 0.25;
+static constexpr double  WP_TOL2     = WP_TOL * WP_TOL;
+static constexpr double  PEN_SCALE   = 1.0 / (double)(LETHAL_COST - WARN_COST);
 struct RobotState { double x, y, yaw, v, w; };
 
 static int    NW, NH;
@@ -76,28 +80,58 @@ static int sweep(double v_min, double v_max, double w_min, double w_max,
     // slightly different candidate set from the one it is compared against.
     const std::vector<double> vs = lattice(v_min, v_max, vel_res);
     const std::vector<double> ws = lattice(w_min, w_max, yaw_res);
-    for (double v : vs) {
-        for (double w : ws) {
+
+    // This scored heading_gain * (pi - yaw_err) at the last rollout sample
+    // plus obstacle_gain * the raw margin to lethal, which is the form
+    // cpp/src/dwa_controller.cpp *replaced* -- so the Python-against-C++ row
+    // was comparing the Python controller's current scoring against the C++
+    // controller's old scoring. The third copy of this loop in the repo to
+    // have drifted from the controller it measures, after mine_sweep in
+    // dwa_compare_cpp.cpp and both harnesses' idea of the window.
+    //
+    // It is now the current scoring, and the current arithmetic with it: cos
+    // and sin advanced by one rotation per step rather than recomputed, a
+    // squared arrival test, and the penalty scaled by a precomputed
+    // reciprocal.
+    const double c0 = std::cos(s.yaw), s0 = std::sin(s.yaw);
+    for (double w : ws) {
+        const double cw = std::cos(w * dt_), sw = std::sin(w * dt_);
+        for (double v : vs) {
             n++;
-            RobotState cur = s;
-            bool collision = false;
-            double min_clearance = (double)LETHAL_COST;
+            const double adv = v * dt_;
+            double px = s.x, py = s.y, pyaw = s.yaw, c = c0, sn = s0;
+            double ax = s.x, ay = s.y, ayaw = s.yaw;
+            bool collision = false, arrived = false;
+            double pen_sum = 0.0;
             int kept = 0;
 
             for (int i = 0; i < steps; i++) {
-                cur = motion(cur, v, w);
-                uint8_t cost = costmap_lookup(cur.x, cur.y);
+                px += adv * c;
+                py += adv * sn;
+                const double nc = c * cw - sn * sw;
+                sn = sn * cw + c * sw;
+                c  = nc;
+                pyaw += w * dt_;
+                const uint8_t cost = costmap_lookup(px, py);
                 if (cost >= LETHAL_COST) { collision = true; break; }
-                min_clearance = std::min(min_clearance, (double)(LETHAL_COST - cost));
+                if (cost > WARN_COST)
+                    pen_sum += (double)(cost - WARN_COST) * PEN_SCALE;
+                if (!arrived) {
+                    const double dx = px - lax, dy = py - lay;
+                    if (dx * dx + dy * dy <= WP_TOL2) {
+                        ax = px; ay = py; ayaw = pyaw; arrived = true;
+                    }
+                }
                 kept++;
             }
             if (collision || kept == 0) continue;
+            if (!arrived) { ax = px; ay = py; ayaw = pyaw; }
 
-            double target_yaw = std::atan2(lay - cur.y, lax - cur.x);
-            double yaw_err    = std::abs(angle_wrap(target_yaw - cur.yaw));
-            double total = heading_gain_  * (M_PI - yaw_err)
-                         + obstacle_gain_ * min_clearance
-                         + speed_gain_    * (v / max_vel_);
+            const double diff = angle_wrap(std::atan2(lay - ay, lax - ax) - ayaw);
+            const double total = heading_gain_ * (1.0 - std::abs(diff) / M_PI)
+                               + speed_gain_ * (v / max_vel_)
+                               - obstacle_gain_ * std::min(10.0,
+                                     pen_sum / steps * 10.0);
             if (total > best_score) { best_score = total; best_v = v; best_w = w; }
         }
     }
