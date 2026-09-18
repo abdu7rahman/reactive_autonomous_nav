@@ -435,20 +435,52 @@ all three orbited it at 0.5 m for the rest of the run.
 
 Reference is Table I of Macenski et al., [*Cost-Aware Kinematically Feasible
 Planning for Mobile and Surface Robotics*](https://arxiv.org/abs/2401.13078).
-`nav2_maps.py` rebuilds their map and query geometry: 10,000 m² random
-occupancy maps at 5 cm resolution (2000 × 2000 cells), ~50 m paths.
+`nav2_maps.py` rebuilds their experiment rather than something like it: three
+10,000 m² random environments at 10/15/20% obstacle density, 5 cm resolution
+(2000 × 2000 cells), and the paper's own query rule, which is quoted there
+because getting it slightly wrong is what went wrong before — "we generated
+1,000 verified start-goal pairs with minimum separation of 3m". Uniform pairs
+in a 100 × 100 m square average 52.1 m apart; these three maps measure 51.9,
+52.2 and 53.7 m, which is what says the geometry matches.
 
 | Density | This repo, C++ A\* | Smac 2D-A\* | NavFn | Hybrid-A\* | SBPL ARA\* |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 10% | **7.3 ms** | 66.2 ms | 71.1 ms | 39.1 ms | 5,640 ms |
-| 15% | **12.0 ms** | 85.6 ms | 66.5 ms | 40.7 ms | 6,587 ms |
-| 20% | **21.3 ms** | 88.8 ms | 61.0 ms | 38.8 ms | 6,633 ms |
+| 10% | **12.7 ms** | 66.2 ms | 71.1 ms | 39.1 ms | 5,640 ms |
+| 15% | **19.2 ms** | 85.6 ms | 66.5 ms | 40.7 ms | 6,587 ms |
+| 20% | **25.2 ms** | 88.8 ms | 61.0 ms | 38.8 ms | 6,633 ms |
 
-Read with the caveats. Their CPU (Ryzen 5 5600X) is considerably faster than
-the one these came off, which flatters this repo. Against that, Smac 2D-A\* is
-cost-aware and returns a smoothed path, and NavFn solves a full navigation
-function — both do more per call than a plain octile A\*. The honest claim is
-same order of magnitude on equivalent maps, not that it beats Nav2.
+Mean over the 1,000 pairs, median of five runs, and the rows reproduce to
+6.3%, 2.1% and 4.0% across those five. The mean is the statistic because a
+1,000-pair table is an average, and because it is the steadier one here: the
+distribution is heavy enough that at 10% density the per-query median is
+6.4 ms against a 12.7 ms mean, and a median over a small sample of that
+jumps between neighbouring queries. That is not a hypothetical. The figures
+this table carried until now — 7.3, 12.0 and 21.3 ms — were a median of
+**eight** pairs drawn from a 50 ± 6 m band, and all three of those choices
+were wrong: the count, the sampling and the statistic. The same eight pairs
+on the same seeded maps printed 9.7, 10.6, 10.6 and 13.1 ms on the 15% row
+across four runs of unchanged code.
+
+And the column that decides whether this is a fair race at all, which the
+band sampling had made agree with the paper by construction:
+
+| Density | This repo, C++ A\* | Smac 2D-A\* | NavFn | Hybrid-A\* |
+| ---: | ---: | ---: | ---: | ---: |
+| 10% | 54.8 m | 50.96 m | 52.60 m | 51.41 m |
+| 15% | 55.5 m | 50.45 m | 52.50 m | 51.10 m |
+| 20% | 57.5 m | 49.65 m | 52.25 m | 50.78 m |
+
+These paths are 7.5, 10.0 and 15.8% longer than the ones Smac 2D-A\* returns
+on the same geometry, and the gap widens with density — which is what an
+8-connected octile path with no smoothing does. The planner is not solving
+the same problem as well; it is solving an easier version of it faster.
+
+Read the timings with that and the rest of the caveats. Their CPU (Ryzen 5
+5600X) is considerably faster than the one these came off, which flatters
+this repo. Smac 2D-A\* is cost-aware and smooths, NavFn solves a full
+navigation function, and both of those cost time this one does not spend. The
+honest claim is same order of magnitude on equivalent maps, at a measurably
+worse path.
 
 ## Python vs C++ in this repo
 
@@ -503,12 +535,14 @@ both report 410.
 | `nav2_maps.py`, `nav2_compare.py` | vs the Nav2 Smac Planner paper |
 | `bench_astar.*`, `bench_dwa.*` | Python vs C++ latency |
 
-Measured on an Intel Xeon @ 2.10 GHz, g++ 13.3 `-O2`, Python 3.11, numpy 2.4,
+Measured on an Intel Xeon @ 2.80 GHz, g++ 13.3 `-O2`, Python 3.11, numpy 2.4,
 except the two figures in **What each of them does**, which are python3.12 with
 numpy 1.26.4 because matplotlib here is built for 3.12.
 
 Absolute numbers move with hardware, and on this host they move without it:
 the same scripts against the same code measured 1.52 to 1.69 times faster
 earlier the same day, and every trail in the closed-loop figures came out
-identical to the centimetre across that change. So every table above is one
-sequential sweep rather than a best-of, and the ratios are the claim.
+identical to the centimetre across that change. The clock above moved too --
+it read 2.10 GHz until `/proc/cpuinfo` was checked against it rather than
+copied forward. So every table above is one sequential sweep rather than a
+best-of, and the ratios are the claim.

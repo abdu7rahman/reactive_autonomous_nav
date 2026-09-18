@@ -148,9 +148,11 @@ simulation is also what turned up the two bugs fixed in `fix(costmap)` and
 ## How it compares
 
 Everything below is reproducible from `bench/` — `bash bench/run.sh` regenerates
-every number on this page. Taken on an Intel Xeon @ 2.10 GHz, g++ 13.3 `-O2`,
+every number on this page. Taken on an Intel Xeon @ 2.80 GHz, g++ 13.3 `-O2`,
 Python 3.11 with numpy 2.4, except the two figures, which are python3.12 with
-numpy 1.26.4 because matplotlib here is built for 3.12.
+numpy 1.26.4 because matplotlib here is built for 3.12. The line above used to
+read 2.10 GHz and was not re-checked against `/proc/cpuinfo` when the sweeps
+were re-run; it is the ratios that carry the claims, for exactly this reason.
 
 ### Local controller vs other DWA implementations
 
@@ -279,22 +281,35 @@ was fixed for.
 Reference numbers are Table I of Macenski et al., [*Cost-Aware Kinematically
 Feasible Planning for Mobile and Surface Robotics*](https://arxiv.org/abs/2401.13078),
 which benchmarks the Nav2 Smac Planners against NavFn and SBPL ARA* on
-10,000 m² random occupancy maps at 5 cm resolution with 1,000 start-goal pairs.
-`bench/nav2_maps.py` rebuilds that map and query geometry (2000 × 2000 cells,
-100 × 100 m, ~50 m paths) so the timings measure comparable work.
+10,000 m² random occupancy maps at 5 cm resolution with "1,000 verified
+start-goal pairs with minimum separation of 3m". `bench/nav2_maps.py` rebuilds
+that map and query geometry — 2000 × 2000 cells, 100 × 100 m, and the same
+1,000 uniform pairs a density, which come out 51.9 to 53.7 m apart against the
+52.1 m a uniform pair in a 100 m square averages.
 
 | Obstacle density | This repo, C++ A\* | Nav2 Smac 2D-A\* | Nav2 NavFn | Nav2 Hybrid-A\* |
 | ---: | ---: | ---: | ---: | ---: |
-| 10% | **7.3 ms** | 66.2 ms | 71.1 ms | 39.1 ms |
-| 15% | **12.0 ms** | 85.6 ms | 66.5 ms | 40.7 ms |
-| 20% | **21.3 ms** | 88.8 ms | 61.0 ms | 38.8 ms |
+| 10% | **12.7 ms** | 66.2 ms | 71.1 ms | 39.1 ms |
+| 15% | **19.2 ms** | 85.6 ms | 66.5 ms | 40.7 ms |
+| 20% | **25.2 ms** | 88.8 ms | 61.0 ms | 38.8 ms |
 
-**Read that with the caveats.** Their CPU (Ryzen 5 5600X) is considerably faster
-than the one these numbers came off, which flatters this repo. Against that,
-Nav2's Smac 2D-A\* is cost-aware and returns a smoothed path, and NavFn solves a
-full navigation function — both do more work per call than a plain octile A\*.
-The honest claim is that this planner is in the same order of magnitude on
-equivalent maps, not that it beats Nav2.
+Mean over the 1,000 pairs, median of five runs, reproducing to 6.3%, 2.1% and
+4.0%. The rows this table carried until now — 7.3, 12.0 and 21.3 — were a
+median of eight pairs drawn from a 50 ± 6 m band, which was neither the
+paper's sample count, nor its sampling, nor the statistic a 1,000-pair table
+reports; the same eight pairs on the same seeded maps printed 9.7, 10.6, 10.6
+and 13.1 ms on the 15% row across four runs of unchanged code.
+
+**Read that with the caveats**, and the first one is in the path length rather
+than the clock. These paths run 54.8, 55.5 and 57.5 m where Smac 2D-A\*
+returns 50.96, 50.45 and 49.65 on the same maps — 7.5 to 15.8% longer, and
+widening with density, which is what an 8-connected octile path with no
+smoothing does. Their CPU (Ryzen 5 5600X) is also considerably faster than the
+one these numbers came off. Nav2's Smac 2D-A\* is cost-aware and returns that
+smoothed path, and NavFn solves a full navigation function — both spend time
+per call that this one does not. The honest claim is that this planner is in
+the same order of magnitude on equivalent maps at a measurably worse path, not
+that it beats Nav2.
 
 `python3 bench/nav2_compare.py`
 
