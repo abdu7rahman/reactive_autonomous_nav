@@ -9,6 +9,8 @@ extern "C" {
 #include <chrono>
 #include <random>
 #include <vector>
+#include "trace.h"
+#include <cfloat>
 
 double bench_goktug(int side, int reps, int n_obstacles) {
     Config gc;
@@ -40,4 +42,106 @@ double bench_goktug(int side, int reps, int n_obstacles) {
     freePointCloud(pc);
     std::sort(t.begin(), t.end());
     return t[t.size() / 2];
+}
+
+// planning() takes the pose, the velocity, the goal and a point cloud and
+// returns the velocity it chose, so the closed loop is its own function called
+// once a tick.  The cloud is the obstacle centres: it has no costmap, and
+// inflating them into one would be scoring a different implementation.  Its
+// footprint is the base rectangle rather than a radius, so the radius parity
+// the others get is applied as a square of the same half-width.
+// Its clearance gain is a harness choice, because it ships none: dwa.h's
+// Config is a plain C struct with no initialisers and its README documents the
+// field without a value.  Taking this repo's obstacle_gain of 5.0 for it, which
+// is what the timing harness beside this does, stops it moving at all -- its
+// clearance term is 1/minr, unnormalised, against a velocity term worth
+// velocity_gain * (max_speed - v), so at 5.0 the cheapest thing it can do is
+// stand still and keep its distance.  That is the same pathology this repo's
+// own controller was fixed for, and the gain that was chosen against a
+// normalised penalty does not carry over to a raw reciprocal.  Swept on this
+// field, metres driven and whether it arrived:
+//
+//   5.0     0.00 m   never moves
+//   1.0     0.00 m   never moves
+//   0.5     0.00 m   never moves
+//   0.2    13.93 m   arrived
+//   0.1    13.79 m   arrived
+//   0.05   13.71 m   arrived
+//
+// 0.2 is the largest that drives, so it is the one that keeps the most of the
+// clearance behaviour the gain is there for.
+static float TRACE_CLEARANCE = 0.2f;
+// Its footprint is a rectangle, not a radius, so "the same clearance as the
+// others" is a choice too: a square of half-width r has the disc of radius r
+// inscribed in it and reaches r*sqrt(2) at the corners, and one of half-width
+// r/sqrt(2) is inscribed in the disc instead.  Swept with the gain.
+static float TRACE_HALFWIDTH = -1.0f;   // < 0 means in.radius
+
+void trace_goktug_gain(float g) { TRACE_CLEARANCE = g; }
+void trace_goktug_footprint(float h) { TRACE_HALFWIDTH = h; }
+
+void trace_goktug(const TraceIn& in, TraceOut& out) {
+    Config gc;
+    gc.maxSpeed = (float)in.top_speed;
+    gc.minSpeed = 0.0f;
+    gc.maxYawrate = (float)in.max_yaw;
+    gc.maxAccel = (float)in.acc_v;
+    gc.maxdYawrate = (float)in.acc_w;
+    gc.velocityResolution = (float)in.vres;
+    gc.yawrateResolution = (float)in.wres;
+    gc.dt = (float)in.dt;
+    gc.predictTime = (float)(in.steps * in.dt);
+    gc.heading = 5.0f; gc.clearance = TRACE_CLEARANCE; gc.velocity = 0.5f;
+    const float half = TRACE_HALFWIDTH > 0 ? TRACE_HALFWIDTH : (float)in.radius;
+    gc.base.xmin = -half; gc.base.ymin = -half;
+    gc.base.xmax =  half; gc.base.ymax =  half;
+
+    PointCloud* pc = createPointCloud(in.nob);
+    for (int i = 0; i < in.nob; i++) {
+        pc->points[i].x = (float)in.obx[i];
+        pc->points[i].y = (float)in.oby[i];
+    }
+    Point goal = {(float)in.gx, (float)in.gy};
+
+    TraceState s{in.sx, in.sy, in.syaw, 0.0, 0.0};
+    std::vector<double> ms, rolls;
+    out.xy = { s.x, s.y };
+    for (int k = 0; k < in.max_steps; k++) {
+        Pose p = {{(float)s.x, (float)s.y}, (float)s.yaw};
+        Velocity vel = {(float)s.v, (float)s.w};
+        DynamicWindow* dw = NULL;
+        createDynamicWindow(vel, gc, &dw);
+        rolls.push_back((double)dw->nPossibleV * (double)dw->nPossibleW);
+        freeDynamicWindow(dw);
+        auto t0 = std::chrono::steady_clock::now();
+        Velocity u = planning(p, vel, goal, pc, gc);
+        ms.push_back(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count());
+        // planning() initialises total_cost to FLT_MAX and keeps a candidate
+        // only on `cost < total_cost`, so when every candidate collides --
+        // every clearance cost is FLT_MAX -- bestVelocity is returned
+        // uninitialised.  Reading it is undefined; in practice it came back
+        // zero and the trail stopped dead at (3.27, 3.26) with an obstacle
+        // 1.04 m away and no movement for the remaining 86 s.  Turning in
+        // place instead is the recovery the amslabtech trace gives its own
+        // node for the same case, so both get it rather than one.
+        double bv = u.linearVelocity, bw = u.angularVelocity;
+        bool any = false;
+        DynamicWindow* adm = NULL;
+        createDynamicWindow(vel, gc, &adm);
+        for (int i = 0; i < adm->nPossibleV && !any; i++)
+            for (int j = 0; j < adm->nPossibleW && !any; j++) {
+                Velocity pv = {adm->possibleV[i], adm->possibleW[j]};
+                if (calculateClearanceCost(p, pv, pc, gc) < FLT_MAX) any = true;
+            }
+        freeDynamicWindow(adm);
+        if (!any) { bv = 0.0; bw = in.max_yaw; }
+        s = trace_step(s, bv, bw, in);
+        out.xy.push_back(s.x);
+        out.xy.push_back(s.y);
+        if (trace_arrived(s, in)) break;
+    }
+    freePointCloud(pc);
+    out.ms = trace_median(ms);
+    out.rolls = trace_median(rolls);
 }

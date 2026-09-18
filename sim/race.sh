@@ -1,7 +1,7 @@
 #!/bin/bash
 # Record the five-robot race against the running simulator.
 #
-#   RACE_COURSE=straight|chicane RACE_FIELD=ours|nav2 race.sh [wall_seconds]
+#   RACE_COURSE=straight|chicane RACE_FIELD=ours|versus|nav2 race.sh [wall_seconds]
 #
 # The course has to be the one race_up.sh spawned -- it decides where the lanes
 # are -- so both read RACE_COURSE from the environment.  RACE_FIELD picks who

@@ -199,6 +199,96 @@ the difference the clip exists to show.
 MPPI is the exception: its 24.8 s is one race, and the four before it are in
 the section below along with what was wrong.
 
+### The nav2 field
+
+The same chicane, with nav2's own controller plugins in three of the five
+lanes. `RACE_FIELD` chooses who races; the course, the path, the plant and the
+walls are identical, so the only thing that differs between lanes is the
+controller.
+
+```bash
+RACE_COURSE=chicane RACE_FIELD=nav2 race_up.sh && \
+RACE_COURSE=chicane RACE_FIELD=nav2 race.sh 900
+```
+
+![this repo's DWA against nav2's controllers](gif/race-chicane-nav2.gif)
+
+| lane | controller | finished |
+|---|---|---|
+| r1 | dwa (this repo) | 14.0 s, 6.00 m |
+| r4 | nav2 pursuit (`RegulatedPurePursuitController`) | 14.5 s, 5.87 m |
+| r2 | nav2 dwb (`DWBLocalPlanner`) | did not cross: 5.79 m of 5.80 |
+| r5 | nav2 graceful (`GracefulController`) | did not cross: 5.74 m of 5.80 |
+| r3 | nav2 mppi (`MPPIController`) | did not cross: 2.35 m of 5.80 |
+
+Read the second column before the first. DWB drove the whole course and is not
+credited with a finish because it stopped 10 mm short of a line the timer
+measures by crossing, and graceful 60 mm short; calling either a failure would
+be reading the table wrong. On the distance that matters they are level with
+the two that crossed. nav2's MPPI stopping at 2.35 m is the one real
+difference, and it is the same 5.80 m course this repo's own MPPI took 24.8 s
+to finish.
+
+Getting the three of them to race at all took four things that are not about
+control:
+
+- **The costmap is a sibling node, not a child.** `controller_server` hosts its
+  own `local_costmap` as a top-level node at `/<ns>/local_costmap/local_costmap`,
+  so its parameters have to sit beside `controller_server:` in the YAML rather
+  than nested inside it. Nested, they are silently ignored and the defaults
+  apply. `config/race_nav2_params.yaml` mirrors the race costmap exactly: 6 × 6 m
+  rolling, 0.05 m, 0.30 m inflation, 0.22 m robot.
+- **DWB's `max_vel_x` defaults to 0.0.** All four plugins are given the plant's
+  own limits, each in its own parameter spelling, from the same four constants
+  the rest of the race uses.
+- **The critic list is per-plugin.** One shared template with DWB's critics in
+  it makes nav2's MPPI refuse to configure -- it rejects
+  `mppi::critics::RotateToGoal` -- so the extra block is substituted per lane.
+- **`SimpleProgressChecker` aborts a controller slowing into its goal.** Its
+  `required_movement_radius` is 0.5 m and DWB was aborted 1 cm from the line
+  for not covering it; `movement_time_allowance` is 30.0 s here.
+
+nav2's controllers take a path only through the `FollowPath` action on
+`/<ns>/follow_path`, never a topic, so `race_timer.py` dispatches per lane:
+the action for a nav2 lane, `/plan` for this package's controllers, and
+`/goal_pose` for a lane running a whole stack.
+
+### The versus field
+
+Both implementations of this repo's DWA against nav2's, in one race.
+
+```bash
+RACE_COURSE=chicane RACE_FIELD=versus race_up.sh && \
+RACE_COURSE=chicane RACE_FIELD=versus race.sh 900
+```
+
+![the C++ and Python DWA against nav2's controllers](gif/race-chicane-versus.gif)
+
+| lane | controller | finished |
+|---|---|---|
+| r1 | dwa-c++ | 13.9 s, 5.98 m |
+| r2 | dwa-py | 13.9 s, 6.05 m |
+| r5 | nav2-pursuit | 14.5 s, 5.88 m |
+| r3 | nav2-dwb | did not cross: 5.79 m of 5.80 |
+| r4 | nav2-mppi | did not cross: 2.35 m of 5.80 |
+
+The C++ and Python controllers finish the same course within a tenth of a
+second of each other, which is the answer to the question the lane exists to
+ask: the port is the same controller, not a faster one. Where the C++ is ahead
+is per tick, not per race -- 0.139 ms against 0.961 ms on the same
+410-trajectory window, in `bench/README.md` -- and on a 6 m course at 0.46 m/s
+neither is anywhere near its budget, so the difference does not show. It would
+on a robot with a 20 ms loop and a 2,500-trajectory window.
+
+**Four recorded versus races measured a fight, not a controller.** `clean.sh`
+swept `lib/reactive_autonomous_nav/` and nothing else, so every relaunch left
+the previous run's C++ `dwa_controller` alive on r1 and two processes published
+to one `cmd_vel`. The lane crawled, and three separate fixes to the C++
+controller were judged not to have worked when what they were being judged
+against was a second copy of themselves. `clean.sh` now sweeps
+`lib/reactive_nav_cpp/` and `nav2_controller/controller_server` too, and
+`race.sh` runs it before every relaunch rather than after.
+
 Two shapes were tried and rejected, both because the bench measured them worse.
 Dropping the smoothing's data weight rounds the corner from a 0.25 m radius to
 0.92 m, which sounds better and is not: the rounding eats 0.056 m of the swing,

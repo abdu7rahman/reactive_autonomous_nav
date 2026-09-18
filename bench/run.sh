@@ -26,4 +26,23 @@ echo; ./bench/bench_astar bench/maps.bin 5  | tee bench/cpp_astar.json
 echo; python3 bench/bench_dwa.py
 echo; ./bench/bench_dwa   bench/local.bin 25 | tee bench/cpp_dwa.json
 echo; [ -x bench/dwa_compare_cpp ] && ./bench/dwa_compare_cpp
+
+# The three tables this script used to leave out, against a README that opens
+# "everything below is reproducible from bench/": the Python four-way, the
+# Nav2-geometry planner comparison, and the two closed-loop figures.
+echo; python3 bench/dwa_compare.py
+echo; python3 bench/nav2_compare.py
+
+# python3.12 for the figures: they render with matplotlib, and the one in
+# dist-packages is built for 3.12 while python3 here is 3.11.  Skipped rather
+# than failed if that interpreter is absent, since every table above is
+# independent of it.
+if command -v python3.12 > /dev/null && \
+   python3.12 -c "import matplotlib" 2> /dev/null; then
+  echo; python3.12 bench/gif_compare.py
+  echo; [ -x bench/dwa_compare_cpp ] && python3.12 bench/gif_compare.py --cpp
+else
+  echo; echo "no python3.12 with matplotlib -- skipping the closed-loop figures"
+fi
+
 echo; python3 bench/report.py

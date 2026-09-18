@@ -1,4 +1,4 @@
 [
- {"window": "accel-limited", "N": 410, "T": 25, "ms": 0.1452, "min_ms": 0.1446},
- {"window": "full velocity space", "N": 2626, "T": 25, "ms": 1.0417, "min_ms": 0.9920}
+ {"window": "accel-limited", "N": 410, "T": 25, "ms": 0.1391, "min_ms": 0.1388},
+ {"window": "full velocity space", "N": 2626, "T": 25, "ms": 1.0214, "min_ms": 0.9857}
 ]

@@ -24,6 +24,8 @@
 #include <random>
 #include <vector>
 
+#include "trace.h"
+
 namespace ams {
 
 // ── the ROS boundary, stubbed ───────────────────────────────────────
@@ -169,4 +171,77 @@ double bench_amslabtech(int side, int reps, int n_obstacles) {
     auto t1 = std::chrono::steady_clock::now();
     (void)best_total;
     return std::chrono::duration<double, std::milli>(t1 - t0).count() / reps;
+}
+
+// Its own generate_trajectory and evaluate_trajectory in closed loop, with
+// the field transformed into the robot frame each tick.
+//
+// The transform is not a liberty: generate_trajectory starts every rollout
+// from a zero State and calc_obs_cost measures against obs_list_, so its
+// trajectories, its obstacles and its goal are all in the base frame -- which
+// is where its node gets them, from a scan.  Feeding it map-frame obstacles
+// would have it avoiding things thirteen metres behind itself.
+//
+// Held to the same plant as the others: max_acceleration_ and max_d_yawrate_
+// are its own 0.4 and 1.0, and target_velocity_ its own 0.5, and all three are
+// overwritten here, or its window would be a fifth as wide as everyone
+// else's.  robot_radius_ likewise: its 0.17 plus 0.01 of padding against the
+// 0.47 the others are given.
+void trace_amslabtech(const TraceIn& in, TraceOut& out) {
+    using namespace ams;
+    sim_time_samples_ = in.steps;
+    predict_time_ = in.steps * in.dt;
+    sim_period_ = in.dt;
+    target_velocity_ = in.top_speed;
+    min_velocity_ = 0.0;
+    max_yawrate_ = in.max_yaw;
+    max_acceleration_ = in.acc_v;
+    max_deceleration_ = in.acc_v;
+    max_d_yawrate_ = in.acc_w;
+    robot_radius_ = in.radius - footprint_padding_;
+
+    TraceState s{in.sx, in.sy, in.syaw, 0.0, 0.0};
+    std::vector<double> ms, rolls;
+    out.xy = { s.x, s.y };
+    for (int k = 0; k < in.max_steps; k++) {
+        const double c = std::cos(-s.yaw), sn = std::sin(-s.yaw);
+        obs_list_.poses.clear();
+        for (int i = 0; i < in.nob; i++) {
+            const double dx = in.obx[i] - s.x, dy = in.oby[i] - s.y;
+            obs_list_.poses.push_back(
+                Pose{Point{dx * c - dy * sn, dx * sn + dy * c, 0.0}});
+        }
+        const double gdx = in.gx - s.x, gdy = in.gy - s.y;
+        const Vector3d goal(gdx * c - gdy * sn, gdx * sn + gdy * c, 0.0);
+        current_cmd_vel_.linear.x = s.v;
+        current_cmd_vel_.angular.z = s.w;
+
+        const Window dw = calc_dynamic_window();
+        double bv = 0.0, bw = 0.0, best = 1e18;
+        int n = 0;
+        auto t0 = std::chrono::steady_clock::now();
+        for (double v = dw.min_velocity_; v <= dw.max_velocity_; v += in.vres) {
+            for (double w = dw.min_yawrate_; w <= dw.max_yawrate_; w += in.wres) {
+                std::vector<State> traj = generate_trajectory(v, w);
+                Cost cost = evaluate_trajectory(traj, goal);
+                cost.calc_total_cost();
+                n++;
+                if (cost.total_cost_ < best) { best = cost.total_cost_; bv = v; bw = w; }
+            }
+        }
+        ms.push_back(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count());
+        rolls.push_back((double)n);
+        // Its node's own recovery when nothing is admissible: turn in place.
+        // Without it a run that meets an obstacle head on stops there, and
+        // the trail would report a stall that is the harness leaving out half
+        // the node rather than anything about its scoring.
+        if (best >= 1e6) { bv = 0.0; bw = in.max_yaw; }
+        s = trace_step(s, bv, bw, in);
+        out.xy.push_back(s.x);
+        out.xy.push_back(s.y);
+        if (trace_arrived(s, in)) break;
+    }
+    out.ms = trace_median(ms);
+    out.rolls = trace_median(rolls);
 }
