@@ -49,6 +49,21 @@ Custom reactive autonomous navigation stack for TurtleBot4, built on ROS2 Jazzy.
 
 ---
 
+## On hardware
+
+[![Custom Planners - Tight Space Navigation](https://i.ytimg.com/vi/4fczERUsW1Y/hqdefault.jpg)](https://youtu.be/4fczERUsW1Y)
+
+[**Custom Planners — Tight Space Navigation**](https://youtu.be/4fczERUsW1Y)
+
+Everything else on this page is a simulator or a bench. This is the stack on
+a real robot, and it is the one thing here that is a recording rather than a
+measurement: no number in any table below is taken from it, and nothing in
+it re-runs from `bench/`. It is here for the question the tables cannot
+answer, which is whether any of this survives a real lidar, a real floor and
+a gap that does not forgive a costmap being 5 cm out.
+
+---
+
 ## In simulation
 
 Every planner and every controller above, driving a TurtleBot 4 through
