@@ -45,7 +45,7 @@ Custom reactive autonomous navigation stack for TurtleBot4, built on ROS2 Jazzy.
 | `pure_pursuit` | Pure Pursuit | Working — monotonic lookahead, curvature-limited speed |
 | `stanley` | Stanley | Working — monotonic reference point |
 | `teb` | Timed Elastic Band | Working — sliding band window |
-| `mppi` | MPPI | Working — 1000 samples, 56-step horizon |
+| `mppi` | MPPI | Working — 1000 samples, 2.8 s horizon re-split by the measured tick interval |
 
 ---
 
@@ -238,8 +238,10 @@ that arrive.
 
 The two implementations of this repo's own controller finish within 0.2 s and
 2 cm of each other, which is the cross-check that matters most: the C++ port is
-the same controller, 0.139 ms against 0.961 ms per tick on the same
-410-trajectory window. Two of the four C and C++ baselines cross about 3 m and
+the same controller. In these two runs it scores its window in 0.14 ms a tick
+against 0.59 for the Python one, on the 246 trajectories the acceleration limit
+leaves at this speed; the bench's own figure, on a fixed 410-trajectory window,
+is in **C++ Implementations** below. Two of the four C and C++ baselines cross about 3 m and
 then crawl, and `bench/README.md` has the instrumented reason — an unnormalised
 `1 / min_r` clearance term that outweighs their whole speed term at about a
 metre from an obstacle, which is the pathology this repo's own C++ controller
