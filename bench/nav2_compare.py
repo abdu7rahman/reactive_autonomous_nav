@@ -14,7 +14,7 @@ bench/nav2_maps.py reproduces that map and query geometry. What it cannot
 reproduce is their CPU or their planner's scope, so read the note at the end
 before quoting any of this.
 
-    python3 bench/nav2_maps.py 8 && ./bench/bench_astar bench/nav2_maps.bin 3
+    python3 bench/nav2_maps.py 30 && ./bench/bench_astar bench/nav2_maps.bin 3
 """
 import json, statistics, subprocess, sys, os
 
@@ -81,6 +81,23 @@ that it beats Nav2.""")
 
 
 if __name__ == "__main__":
-    main(int(sys.argv[1]) if len(sys.argv) > 1 else 8)
+    # 30 pairs a map, not 8. The maps and the queries are seeded (nav2_maps.py
+    # dumps with seed=0), so every run plans exactly the same 3 x N problems --
+    # and at N=8 the printed figure still moved 9.7, 10.6, 10.6, 13.1 ms on the
+    # 15% row across four runs of unchanged code, a 32% spread. The reason is
+    # the statistic, not the planner: the per-query times are heavy-tailed (at
+    # 10% density the mean is 13.7 ms against a 6.8 ms median, because a few
+    # queries expand five times the nodes the rest do), so the median of 8 sits
+    # between two queries of quite different cost and a few percent of timing
+    # noise swaps which one it lands on. At 30 the same rows hold to 5-9% over
+    # five runs, which is worth the 64 s a run costs and the 360 MB the dump
+    # takes -- every pair carries its own copy of the 2000 x 2000 grid.
+    #
+    # The 5-9% that is left is this host and not the sample count: five timings
+    # of one fixed 30-pair dump spread 7.4/5.5/5.2%, the same as five runs that
+    # rebuild it. Taking bench_astar's best-of-3 (min_ms) instead of its
+    # median-of-3 was tried against that and measured no better -- 9.3/5.5/4.7%
+    # -- so the statistic was left alone and the README quotes the spread.
+    main(int(sys.argv[1]) if len(sys.argv) > 1 else 30)
 
 
