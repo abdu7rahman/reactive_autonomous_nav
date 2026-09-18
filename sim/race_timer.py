@@ -108,6 +108,9 @@ class Timer(Node):
         self.lane_x = {ns: x for ns, x, _c in GRID}
         self.progress = {ns: 0.0 for ns, _x, _c in GRID}
         self.moved = {ns: 0.0 for ns, _x, _c in GRID}
+        # Where each robot was when its `moved` stamp was last refreshed.
+        # Separate from progress[] on purpose -- see _odom.
+        self.anchor = {ns: 0.0 for ns, _x, _c in GRID}
         self.finished: dict[str, float] = {}
         for ns, _x, _c in GRID:
             self.create_subscription(
@@ -145,8 +148,24 @@ class Timer(Node):
 
     def _odom(self, ns: str, msg: Odometry) -> None:
         x = msg.pose.pose.position.x
-        if x > self.progress[ns] + MOVED:
+        # Against the anchor -- where it was when `moved` was last stamped --
+        # and not against progress, which is bumped to x a line further down
+        # on every improvement.  Compared against progress this asked whether
+        # a *single odometry message* had advanced more than a centimetre,
+        # which at 0.29 m/s and 50 Hz of odometry is 0.006 m and never true.
+        # So a robot driving steadily was recorded as not having moved since
+        # the grid released, and once the other four crossed, the stall rule
+        # below ended the race at exactly t0 + STALL.
+        #
+        # It cost the chicane's fifth lane a finish: MPPI drove the course in
+        # 24.8 s on a host where that fitted inside the 25 s guillotine by two
+        # tenths, and on a slower one it was cut off at 4.39 m of 5.80 while
+        # its own log showed it 0.71 m from the goal and still closing.  The
+        # comment on STALL says "has gained less than a centimetre in this
+        # many simulated seconds", which is what this now measures.
+        if x > self.anchor[ns] + MOVED:
             self.moved[ns] = self.sim
+            self.anchor[ns] = x
         if x > self.progress[ns]:
             self.progress[ns] = x
         if ns not in self.finished and x >= FINISH and self.t0 is not None:
@@ -256,6 +275,7 @@ class Timer(Node):
             self._send(ns, x)
         self.t0 = self.sim
         self.moved = {ns: self.t0 for ns, _x, _c in GRID}
+        self.anchor = {ns: self.progress[ns] for ns, _x, _c in GRID}
         what = (f'{len(self._plan(GRID[0][0]).poses)}-point reference paths'
                 if GATES else f'goals {RACE_LENGTH:.1f} m ahead')
         how = (f' ({len(self.follow)} of them as FollowPath goals)'

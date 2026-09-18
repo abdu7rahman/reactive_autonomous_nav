@@ -319,7 +319,24 @@ class MPPIControllerNode(Node):
         # first: MPPI got 2.11 m up the chicane rather than 0.51, and its dt
         # sat pinned at the 2.5x bound on 87 of 90 ticks with a 2.8 s horizon
         # stretched to 7.
-        now = time.perf_counter()
+        # The node's own clock, not time.perf_counter().  dt is the timestep
+        # the rollouts integrate the robot with, so the interval it is set
+        # from has to be measured in the same seconds the robot moves in.
+        # Under use_sim_time -- which is every launch file in this package --
+        # those are simulated seconds and perf_counter is wall seconds, and
+        # the two differ by the simulator's real-time factor: the race logs
+        # report 0.317 and 0.176, so a 50 ms timer period was being measured
+        # as 158 ms and 284 ms and clamped to the 233 ms bound. Measured on
+        # bench/test_chicane.py's course with the two clocks pulled apart, at
+        # a real-time factor of 0.176 against a true one:
+        #
+        #   ref speed 0.7    21.5 s, 0.174 m deviation   ->  20.7 s, 0.122 m
+        #   ref speed 1.0    18.6 s, 0.227 m deviation   ->  16.8 s, 0.173 m
+        #
+        # so the wrong clock cost about a second and forty percent of the
+        # tracking error. On a real robot get_clock() is the wall clock and
+        # this is the same measurement it was.
+        now = self.get_clock().now().nanoseconds * 1e-9
         if not self.nominal_dt:
             self.nominal_dt = self.dt
             self.horizon_s = self.dt * self.time_steps
