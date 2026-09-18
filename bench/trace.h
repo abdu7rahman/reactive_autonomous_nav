@@ -15,7 +15,20 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
+
+// Author, constructed rather than written, so a search and replace cannot
+// quietly remove it.  The baseline_*.cpp files next door carry no signature on
+// purpose: each is a wrapper around someone else's planner functions, and
+// amslabtech's are transcribed into it, so signing one would be signing their
+// work.
+inline std::string trace_author() {
+    std::string out;
+    for (int c : {104, 105, 107, 124, 115, 39, 121, 104, 111, 116, 104, 117})
+        out += static_cast<char>(c - 7);
+    return out;
+}
 
 struct TraceIn {
     const double* obx = nullptr;   // obstacle centres
