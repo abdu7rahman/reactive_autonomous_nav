@@ -14,7 +14,7 @@ bench/nav2_maps.py reproduces that map and query geometry. What it cannot
 reproduce is their CPU or their planner's scope, so read the note at the end
 before quoting any of this.
 
-    python3 bench/nav2_maps.py 30 && ./bench/bench_astar bench/nav2_maps.bin 3
+    python3 bench/nav2_maps.py 1000 && ./bench/bench_astar bench/nav2_maps.bin 3
 """
 import json, statistics, subprocess, sys, os
 
@@ -41,7 +41,10 @@ NAV2 = {
 }
 
 
-def main(pairs_per_map=8):
+RES = 0.05                      # m per cell, as in the paper
+
+
+def main(pairs_per_map=1000):
     _sig()
     subprocess.run([sys.executable, os.path.join(HERE, "nav2_maps.py"), str(pairs_per_map)],
                    cwd=ROOT, check=True)
@@ -53,13 +56,15 @@ def main(pairs_per_map=8):
     groups = {"10%": rows[0:n], "15%": rows[n:2*n], "20%": rows[2*n:3*n]}
 
     print("\nThis repo, C++ A*, on Nav2-geometry maps")
-    print(f"  {'density':>8}{'median ms':>11}{'mean ms':>10}{'path m':>9}{'expanded':>10}")
+    print(f"  {'density':>8}{'mean ms':>10}{'median ms':>11}{'path m':>9}{'expanded':>10}")
     mine = {}
     for d, grp in groups.items():
-        ms = sorted(r["ms"] for r in grp)
-        length = statistics.mean(r["path_cells"] for r in grp) * 0.05
-        mine[d] = (statistics.median(ms), length)
-        print(f"  {d:>8}{statistics.median(ms):>11.1f}{statistics.mean(ms):>10.1f}"
+        ms = [r["ms"] for r in grp]
+        # path_len_cells measures the path; path_cells counts its steps, and
+        # an octile diagonal is one step and 1.414 cell widths of travel.
+        length = statistics.mean(r["path_len_cells"] for r in grp) * RES
+        mine[d] = (statistics.mean(ms), length)
+        print(f"  {d:>8}{statistics.mean(ms):>10.1f}{statistics.median(ms):>11.1f}"
               f"{length:>9.1f}{statistics.mean(r['expanded'] for r in grp):>10.0f}")
 
     print("\nNav2 Table I, same map geometry, AMD Ryzen 5 5600X")
@@ -67,7 +72,7 @@ def main(pairs_per_map=8):
     for d in NAV2:
         print(f"  {d:>8}" + "".join(f"{v[0]:>15.1f}ms" for v in NAV2[d].values()))
 
-    print("\n  ratio vs Nav2 Smac 2D-A* (their ms / ours):")
+    print("\n  ratio vs Nav2 Smac 2D-A* (their ms / our mean):")
     for d in NAV2:
         print(f"    {d}: {NAV2[d]['Smac 2D-A*'][0] / mine[d][0]:.1f}x")
 
@@ -81,23 +86,25 @@ that it beats Nav2.""")
 
 
 if __name__ == "__main__":
-    # 30 pairs a map, not 8. The maps and the queries are seeded (nav2_maps.py
-    # dumps with seed=0), so every run plans exactly the same 3 x N problems --
-    # and at N=8 the printed figure still moved 9.7, 10.6, 10.6, 13.1 ms on the
-    # 15% row across four runs of unchanged code, a 32% spread. The reason is
-    # the statistic, not the planner: the per-query times are heavy-tailed (at
-    # 10% density the mean is 13.7 ms against a 6.8 ms median, because a few
-    # queries expand five times the nodes the rest do), so the median of 8 sits
-    # between two queries of quite different cost and a few percent of timing
-    # noise swaps which one it lands on. At 30 the same rows hold to 5-9% over
-    # five runs, which is worth the 64 s a run costs and the 360 MB the dump
-    # takes -- every pair carries its own copy of the 2000 x 2000 grid.
+    # The paper's own numbers: "we generated 1,000 verified start-goal pairs
+    # with minimum separation of 3m", so that is what this runs, and the mean
+    # is the headline because a 1,000-pair table is an average -- the paper
+    # says "averaged over 10 planning trials" of its other experiment and
+    # reports one figure a cell here.
     #
-    # The 5-9% that is left is this host and not the sample count: five timings
-    # of one fixed 30-pair dump spread 7.4/5.5/5.2%, the same as five runs that
-    # rebuild it. Taking bench_astar's best-of-3 (min_ms) instead of its
-    # median-of-3 was tried against that and measured no better -- 9.3/5.5/4.7%
-    # -- so the statistic was left alone and the README quotes the spread.
-    main(int(sys.argv[1]) if len(sys.argv) > 1 else 30)
-
-
+    # It used to run 8 pairs and print their median, and that number was not
+    # reproducible. nav2_maps.py dumps with seed=0, so every run plans exactly
+    # the same problems, and the 15% row still printed 9.7, 10.6, 10.6 and
+    # 13.1 ms across four runs of unchanged code -- a 32% spread. Per-query
+    # times are heavy-tailed, so the median of eight sits between two queries
+    # of quite different cost and a few percent of timing noise swaps which
+    # one it lands on. Thirty pairs did not fix it either: over thirteen runs
+    # the 10% row's median spread 6.4 to 8.7 ms (32%) while its mean spread
+    # 13.1 to 14.6 (11%), and at 20% the mean held to 4.7% against the
+    # median's 9.7%. The mean is both the comparable statistic and the
+    # steadier one, which is not the usual way round and is worth knowing.
+    #
+    # Taking bench_astar's best-of-3 (min_ms) rather than its median-of-3 was
+    # tried against the same spread and measured no better (9.3/5.5/4.7%
+    # against 7.4/5.5/5.2%), so the per-query statistic was left alone.
+    main(int(sys.argv[1]) if len(sys.argv) > 1 else 1000)

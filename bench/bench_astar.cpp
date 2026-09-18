@@ -121,6 +121,40 @@ void _sig() {
 }
 }  // namespace
 
+// One query: time it reps times and print the row. Split out of main so both
+// dump layouts below share it and cannot drift apart.
+static void time_query(const Grid& gmap, int sx, int sy, int gx, int gy,
+                       int reps, bool last)
+{
+    long expanded = 0;
+    auto p = run_astar(gmap, sx, sy, gx, gy, expanded);   // warm up
+
+    std::vector<double> ms;
+    for (int r = 0; r < reps; r++) {
+        auto t0 = std::chrono::steady_clock::now();
+        p = run_astar(gmap, sx, sy, gx, gy, expanded);
+        ms.push_back(std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count());
+    }
+    std::sort(ms.begin(), ms.end());
+
+    // path_cells counts steps; path_len_cells measures the path. A* moves on
+    // eight neighbours, so a diagonal step is one cell and 1.414 cell widths
+    // of travel, and multiplying the count by the resolution reported 45.4 m
+    // for pairs whose straight-line separation was 50.5 -- shorter than the
+    // straight line, which no path can be. Callers scale this by their own
+    // resolution instead.
+    double len = 0.0;
+    for (size_t k = 1; k < p.size(); k++)
+        len += std::hypot((double)(p[k].first  - p[k-1].first),
+                          (double)(p[k].second - p[k-1].second));
+
+    printf(" {\"map\": \"%ux%u\", \"ms\": %.3f, \"min_ms\": %.3f, "
+           "\"expanded\": %ld, \"path_cells\": %zu, \"path_len_cells\": %.1f}%s\n",
+           gmap.info.width, gmap.info.height, ms[ms.size()/2], ms.front(),
+           expanded, p.size(), len, last ? "" : ",");
+}
+
 int main(int argc, char** argv)
 {
   _sig();
@@ -132,31 +166,47 @@ int main(int argc, char** argv)
     int32_t n = 0;
     if (fread(&n, 4, 1, f) != 1) return 1;
     printf("[\n");
-    for (int i = 0; i < n; i++) {
-        int32_t hdr[6];
-        if (fread(hdr, 4, 6, f) != 6) return 1;
-        Grid gmap;
-        gmap.info.width  = hdr[0];
-        gmap.info.height = hdr[1];
-        gmap.data.resize((size_t)hdr[0] * hdr[1]);
-        if (fread(gmap.data.data(), 1, gmap.data.size(), f) != gmap.data.size()) return 1;
 
-        const int sy = hdr[2], sx = hdr[3], gy = hdr[4], gx = hdr[5];
-        long expanded = 0;
-        auto p = run_astar(gmap, sx, sy, gx, gy, expanded);   // warm up
-
-        std::vector<double> ms;
-        for (int r = 0; r < reps; r++) {
-            auto t0 = std::chrono::steady_clock::now();
-            p = run_astar(gmap, sx, sy, gx, gy, expanded);
-            ms.push_back(std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - t0).count());
+    // Two layouts, told apart by the first word. maps.py writes a positive
+    // case count and then one copy of the grid per query, which is fine when
+    // the grids are 128 to 384 cells a side. nav2_maps.py writes 2000 x 2000,
+    // so a query costs 4 MB of file and 1,000 of them -- the count the paper
+    // this bench is compared against used -- would be 12 GB. The grouped
+    // layout stores each map once with its queries after it; MAGIC_GROUPED is
+    // negative so it can never be read as a case count.
+    if (n == -2) {
+        int32_t n_maps = 0;
+        if (fread(&n_maps, 4, 1, f) != 1) return 1;
+        for (int m = 0; m < n_maps; m++) {
+            int32_t dim[2];
+            if (fread(dim, 4, 2, f) != 2) return 1;
+            Grid gmap;
+            gmap.info.width  = dim[0];
+            gmap.info.height = dim[1];
+            gmap.data.resize((size_t)dim[0] * dim[1]);
+            if (fread(gmap.data.data(), 1, gmap.data.size(), f) != gmap.data.size())
+                return 1;
+            int32_t n_q = 0;
+            if (fread(&n_q, 4, 1, f) != 1) return 1;
+            for (int i = 0; i < n_q; i++) {
+                int32_t q[4];
+                if (fread(q, 4, 4, f) != 4) return 1;
+                time_query(gmap, q[1], q[0], q[3], q[2], reps,
+                           m + 1 == n_maps && i + 1 == n_q);
+            }
         }
-        std::sort(ms.begin(), ms.end());
-        printf(" {\"map\": \"%dx%d\", \"ms\": %.3f, \"min_ms\": %.3f, "
-               "\"expanded\": %ld, \"path_cells\": %zu}%s\n",
-               hdr[0], hdr[1], ms[ms.size()/2], ms.front(), expanded, p.size(),
-               i + 1 < n ? "," : "");
+    } else {
+        for (int i = 0; i < n; i++) {
+            int32_t hdr[6];
+            if (fread(hdr, 4, 6, f) != 6) return 1;
+            Grid gmap;
+            gmap.info.width  = hdr[0];
+            gmap.info.height = hdr[1];
+            gmap.data.resize((size_t)hdr[0] * hdr[1]);
+            if (fread(gmap.data.data(), 1, gmap.data.size(), f) != gmap.data.size())
+                return 1;
+            time_query(gmap, hdr[3], hdr[2], hdr[5], hdr[4], reps, i + 1 == n);
+        }
     }
     printf("]\n");
     fclose(f);

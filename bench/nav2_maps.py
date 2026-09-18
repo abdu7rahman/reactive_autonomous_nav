@@ -54,38 +54,58 @@ def _reachable_from(g, start):
     return seen
 
 
-def query_pairs(g, count, seed, sep_m=50.0, tol_m=6.0):
-    """Start-goal pairs about sep_m apart, both in the same free component."""
+def query_pairs(g, count, seed, min_sep_m=3.0):
+    """Uniform random start-goal pairs in one free component, min_sep_m apart.
+
+    The paper's wording is the specification: "we generated 1,000 verified
+    start-goal pairs with minimum separation of 3m". This drew pairs from a
+    50 +/- 6 m band instead, which is not the same experiment and not the one
+    the docstring above claimed. Uniform pairs in a 100 x 100 m square average
+    52.1 m apart, which is why their l_path column reads 49.65 to 52.60 m; a
+    band at 50 m reproduces that mean and throws away the spread around it,
+    and A* time is superlinear in separation, so the tails are exactly the
+    part that decides a mean. The band also made the l_path column useless as
+    a cross-check, because it agreed with the paper by construction.
+    """
     rng = np.random.default_rng(seed + 991)
-    h, w = g.shape
     free = np.argwhere(g < 253)
     anchor = tuple(free[int(rng.integers(len(free)))])
     comp = _reachable_from(g, anchor)
     idx = np.argwhere(comp)
+    min_sep = min_sep_m / RES
     pairs = []
-    sep, tol = sep_m / RES, tol_m / RES
     guard = 0
-    while len(pairs) < count and guard < count * 4000:
+    while len(pairs) < count and guard < count * 100:
         guard += 1
         a = idx[int(rng.integers(len(idx)))]
         b = idx[int(rng.integers(len(idx)))]
-        d = np.hypot(*(a - b))
-        if abs(d - sep) <= tol:
+        if np.hypot(*(a - b)) >= min_sep:
             pairs.append((tuple(int(v) for v in a), tuple(int(v) for v in b)))
     return pairs
 
 
-def dump(path, densities=(0.10, 0.15, 0.20), pairs_per_map=30, seed=0):
+# First word of the dump. The old layout led with a positive case count and
+# repeated the whole grid for every query, which at 2000 x 2000 is 4 MB a
+# query: the paper's 1,000 pairs a density would have been a 12 GB file, and
+# the bench ran 8 instead. Grouped, the three maps cost 12 MB however many
+# queries hang off them. Negative so bench_astar can never mistake it for a
+# count.
+MAGIC_GROUPED = -2
+
+
+def dump(path, densities=(0.10, 0.15, 0.20), pairs_per_map=1000, seed=0):
     cases = []
     with open(path, "wb") as f:
-        f.write(np.int32(sum(1 for _ in densities) * pairs_per_map).tobytes())
+        f.write(np.int32(MAGIC_GROUPED).tobytes())
+        f.write(np.int32(sum(1 for _ in densities)).tobytes())
         for i, d in enumerate(densities):
             g = random_map(d, seed + i)
             qs = query_pairs(g, pairs_per_map, seed + i)
+            f.write(np.array([g.shape[1], g.shape[0]], dtype=np.int32).tobytes())
+            f.write(g.astype(np.uint8).astype(np.int8).tobytes())
+            f.write(np.int32(len(qs)).tobytes())
             for (sr, sc), (gr, gc) in qs:
-                f.write(np.array([g.shape[1], g.shape[0], sr, sc, gr, gc],
-                                 dtype=np.int32).tobytes())
-                f.write(g.astype(np.uint8).astype(np.int8).tobytes())
+                f.write(np.array([sr, sc, gr, gc], dtype=np.int32).tobytes())
             cases.append((d, g, qs))
     return cases
 
@@ -93,7 +113,7 @@ def dump(path, densities=(0.10, 0.15, 0.20), pairs_per_map=30, seed=0):
 if __name__ == "__main__":
     _sig()
     import sys
-    n_pairs = int(sys.argv[1]) if len(sys.argv) > 1 else 30
+    n_pairs = int(sys.argv[1]) if len(sys.argv) > 1 else 1000
     cases = dump("bench/nav2_maps.bin", pairs_per_map=n_pairs)
     for d, g, qs in cases:
         occ = (g >= 253).mean()
