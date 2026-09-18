@@ -75,6 +75,32 @@ FIELDS = {
                        'RegulatedPurePursuitController'),
         'r5': ('nav2', 'nav2_graceful_controller::GracefulController'),
     },
+    # The two bench fields put bench/README.md's seven-way comparison on the
+    # robot. They are two clips rather than one because the chicane is five
+    # lanes wide and the comparison is seven implementations: the free
+    # rectangle the course was measured into is 10.0 m across at its longest
+    # (see COURSES below), and five 1.7 m lanes already use 8.5 m of it, so a
+    # seventh lane is 11.9 m of course in a 10.0 m hall. Splitting on language
+    # rather than arbitrarily keeps each clip to one comparison a reader can
+    # hold, and puts this package's own DWA in both as the common lane.
+    #
+    # bench-py   this package's DWA in both languages against the two
+    #            reference Python implementations, which is the
+    #            dwa_compare.py table driven rather than timed.
+    # bench-cpp  the C++ controller against the three C and C++ baselines,
+    #            which is dwa_compare_cpp.
+    'bench-py': {
+        'r1': ('cpp', 'dwa'),
+        'r2': ('pkg', 'dwa'),
+        'r3': ('bench', 'pythonrobotics'),
+        'r4': ('bench', 'kmilo7204'),
+    },
+    'bench-cpp': {
+        'r1': ('cpp', 'dwa'),
+        'r2': ('bench', 'cpprobotics'),
+        'r3': ('bench', 'goktug97'),
+        'r4': ('bench', 'amslabtech'),
+    },
 }
 
 FIELD = os.environ.get('RACE_FIELD', 'ours')
@@ -94,6 +120,14 @@ _SHORT = {'DWBLocalPlanner': 'nav2-dwb',
           'RegulatedPurePursuitController': 'nav2-pursuit',
           'GracefulController': 'nav2-graceful'}
 
+# A baseline lane is labelled with whose implementation it is, because that is
+# the only thing distinguishing it: same robot, same costmap, same path, same
+# plant limits, same sampling resolution. One token each, for the same reason
+# as above -- RViz breaks a TEXT_VIEW_FACING label on its spaces.
+_BENCH = {'pythonrobotics': 'PythonRobotics', 'kmilo7204': 'kmilo7204',
+          'cpprobotics': 'CppRobotics', 'goktug97': 'goktug97',
+          'amslabtech': 'amslabtech'}
+
 
 _MIXED = any(k == 'cpp' for k, _s in ENTRANTS.values())
 
@@ -112,6 +146,8 @@ def _label(kind, spec):
         return f'{spec}-c++'
     if kind == 'pkg':
         return f'{spec}-py' if _MIXED else spec
+    if kind == 'bench':
+        return _BENCH[spec]
     return _SHORT[spec.rsplit('::', 1)[1]]
 
 
@@ -145,9 +181,15 @@ def nav2_lanes():
 
 
 def own_lanes():
-    """The lanes running one of this package's own controller nodes."""
+    """The lanes running a controller node of this package's own launching.
+
+    A 'bench' lane is somebody else's planner inside this package's
+    baseline_controller node, so it comes up and is wired exactly like a 'pkg'
+    lane -- same costmap, same remaps, same /plan -- and only the scoring
+    function inside it is theirs.
+    """
     return [ns for ns, (kind, _spec) in ENTRANTS.items()
-            if kind in ('pkg', 'cpp')]
+            if kind in ('pkg', 'cpp', 'bench')]
 
 # The two courses.
 #
@@ -190,7 +232,22 @@ COURSE = os.environ.get('RACE_COURSE', 'chicane')
 if COURSE not in COURSES:
     raise SystemExit(f'RACE_COURSE={COURSE!r} is not one of {sorted(COURSES)}')
 
-LANES = COURSES[COURSE]['lanes']
+# The lanes the field actually fills. A course declares five, and the two
+# bench fields enter four, so the grid, the gates, the RViz framing, the odom
+# pins and the timer all follow the entrants rather than the course -- five
+# robots spawned for four controllers is a robot parked on the start line for
+# the whole race, and the fifth lane's gates standing in an empty lane.
+#
+# Contiguous from r1, which is what wall_poses() needs: it closes the outside
+# of the grid by putting the wall a missing neighbour would have, and a gap in
+# the middle would leave two lanes with an open gate on one side. Four lanes
+# is 6.8 m of the 10.0 m free width the course was measured into, so it fits
+# wherever five did.
+LANES = {ns: x for ns, x in COURSES[COURSE]['lanes'].items()
+         if ns in ENTRANTS}
+if list(LANES) != list(COURSES[COURSE]['lanes'])[:len(LANES)]:
+    raise SystemExit(f'RACE_FIELD={FIELD} fills {sorted(LANES)}, which is not '
+                     f'the first {len(LANES)} lanes of RACE_COURSE={COURSE}')
 START_Y = COURSES[COURSE]['start_y']
 RACE_LENGTH = COURSES[COURSE]['length']
 GATES = COURSES[COURSE]['gates']

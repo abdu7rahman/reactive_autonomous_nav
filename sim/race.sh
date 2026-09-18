@@ -31,6 +31,11 @@ export RACE_FIELD=${RACE_FIELD:-ours}
 
 WALL=${1:-600}
 eval "$(python3 $G/grid_tf.py --lanes)"
+# How many robots this field enters, from the same module that places them.
+# It was the literal 5, and the two bench fields enter four: a hard-coded
+# count turns "every robot is on the start line" into a check that can only
+# fail, and "every robot moved" into one that can never pass.
+N=$(echo $LANES | wc -w)
 TAG=race; [ "$COURSE" != "straight" ] && TAG="race-$COURSE"
 [ "$RACE_FIELD" != "ours" ] && TAG="$TAG-$RACE_FIELD"
 RUN=$G/run; JOB=$RUN/job; mkdir -p "$JOB" "$RUN/log" "$G/gif"
@@ -69,7 +74,7 @@ for lane in $LANES; do
     exit 1
   fi
 done
-echo "    all five transform chains up"
+echo "    all $N transform chains up"
 
 # And on the grid being a grid.  Odometry is where it was when the robot
 # spawned, and nothing in this stack can put it back: a teleport moves the body
@@ -81,11 +86,11 @@ echo "    all five transform chains up"
 onstart=$(timeout 150 python3 $G/race_timer.py 1 --no-start \
           --ros-args -p use_sim_time:=true 2>/dev/null \
           | grep -cE "reached 0\.[0-9]+ m")
-if [ "${onstart:-0}" -lt 5 ]; then
-  echo "    only ${onstart:-0}/5 robots are on the start line -- run race_up.sh first"
+if [ "${onstart:-0}" -lt "$N" ]; then
+  echo "    only ${onstart:-0}/$N robots are on the start line -- run race_up.sh first"
   exit 1
 fi
-echo "    all five on the start line"
+echo "    all $N on the start line"
 
 # Bring the nav stack up, then walk the ten costmaps through their lifecycle
 # with lifecycle_up.py rather than leaving it to five nav2 lifecycle managers.
@@ -187,8 +192,8 @@ sed -n '/finish order/,$p' "$RUN/log/$TAG.timer.log" 2>/dev/null
 # them needed its path sent twice, is worth re-running rather than keeping.
 moved=$(grep -oE "moving after the release: [0-9]+" "$RUN/log/$TAG.timer.log" \
         2>/dev/null | grep -oE "[0-9]+$")
-if [ "${moved:-0}" != "5" ]; then
-  echo "    only ${moved:-0}/5 robots moved -- $TAG.ts kept, no gif"
+if [ "${moved:-0}" != "$N" ]; then
+  echo "    only ${moved:-0}/$N robots moved -- $TAG.ts kept, no gif"
   exit 1
 fi
 if grep -q "not a fair one" "$RUN/log/$TAG.timer.log" 2>/dev/null; then

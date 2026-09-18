@@ -1,7 +1,8 @@
 #!/bin/bash
 # Bring up the warehouse with five TurtleBot 4s on a start line.
 #
-#   RACE_COURSE=straight|chicane race_up.sh
+#   RACE_COURSE=straight|chicane RACE_FIELD=ours|versus|nav2|bench-py|bench-cpp \
+#     race_up.sh
 #
 # The course -- where the lanes are, how far apart, and what is standing on
 # them -- is reactive_autonomous_nav/race_course.py.  Nothing here knows: the
@@ -39,6 +40,13 @@ export DISPLAY=:99
 # from the environment, and five processes each falling back to their own
 # default is five chances to disagree.
 export RACE_COURSE=${RACE_COURSE:-chicane}
+# The field too, because the grid is now the field's size rather than the
+# course's: the two bench fields enter four implementations, and a grid built
+# without knowing that spawns a fifth robot with no controller to drive it and
+# stands a set of gates in an empty lane. race.sh reads the same variable, so
+# a grid brought up for one field and raced as another would put every label
+# on the wrong robot -- which is the failure grid_tf.py's own header records.
+export RACE_FIELD=${RACE_FIELD:-ours}
 
 # The overlay first: it carries the same description with the OAK-D stripped
 # out, and five depth cameras rendering through llvmpipe is most of the cost of
@@ -182,13 +190,16 @@ for lane in $LANES; do
   printf "  %s scan=%s odom=%s\n" "$ns" "$n" "$m"
   [ "$n$m" = "11" ] && ok=$((ok + 1))
 done
-echo "robots live: $ok/5"
-# $N_WALLS, not a literal: the straight has none and the chicane has eighteen,
-# and the first chicane run passed a gate written for fifteen with three walls
-# missing.
-if [ "$ok" = "5" ] && [ "$gates" = "$N_WALLS" ]; then
+N=$(echo $LANES | wc -w)
+echo "robots live: $ok/$N"
+# $N_WALLS and $N, not literals: the straight has no walls and the chicane
+# eighteen, and the first chicane run passed a gate written for fifteen with
+# three walls missing. The robot count went the same way the moment a field
+# entered four -- the grid came up correctly, all four live, and the literal
+# 5 failed it.
+if [ "$ok" = "$N" ] && [ "$gates" = "$N_WALLS" ]; then
   echo RACEUP
 else
-  echo "RACEUP FAILED -- robots $ok/5, course walls $gates/$N_WALLS"
+  echo "RACEUP FAILED -- robots $ok/$N, course walls $gates/$N_WALLS"
   exit 1
 fi

@@ -206,14 +206,30 @@ def generate_launch_description():
         # same remaps carry it.  It declares map_frame and base_frame and
         # nothing else of the five frame parameters, because that is all it
         # looks up.
-        package = 'reactive_nav_cpp' if kind == 'cpp' else \
-                  'reactive_autonomous_nav'
-        controller = 'dwa_controller' if kind == 'cpp' else f'{spec}_controller'
+        #
+        # A 'bench' lane is somebody else's planner hosted in this package's
+        # baseline_controller, which does the ROS half -- costmap, carrot,
+        # plant clamp -- and calls their scoring function for the command. It
+        # comes up like any other lane and takes the same remaps for the same
+        # reason: what the clip compares is the scoring function, so
+        # everything around it has to be the same thing.  The Python
+        # references are hosted by the Python node and the C and C++ ones by
+        # reactive_nav_cpp's, because that is where each already compiles.
+        package, controller, extra = 'reactive_autonomous_nav', None, {}
+        if kind == 'cpp':
+            package, controller = 'reactive_nav_cpp', 'dwa_controller'
+        elif kind == 'bench':
+            controller = 'baseline_controller'
+            extra = {'impl': spec}
+            if spec not in ('pythonrobotics', 'kmilo7204'):
+                package = 'reactive_nav_cpp'
+        else:
+            controller = f'{spec}_controller'
         frames = {'map_frame': 'map',
                   'odom_frame': f'{ns}/odom',
                   'base_frame': f'{ns}/base_link'}
         common = dict(namespace=ns, output='screen',
-                      parameters=[{'use_sim_time': True}, frames],
+                      parameters=[{'use_sim_time': True}, frames, extra],
                       remappings=remaps(ns))
 
         cm_cfg = costmap_params(pkg, ns)

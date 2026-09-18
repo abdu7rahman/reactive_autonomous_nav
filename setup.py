@@ -35,6 +35,7 @@ setup(
             'teb_controller          = reactive_autonomous_nav.teb_controller:main',
             'mppi_controller         = reactive_autonomous_nav.mppi_controller:main',
             'costmap_manager         = reactive_autonomous_nav.costmap_manager:main',
+            'baseline_controller     = reactive_autonomous_nav.baseline_controller:main',
         ],
     },
 )
