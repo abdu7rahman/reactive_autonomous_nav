@@ -396,14 +396,32 @@ RACE_COURSE=chicane RACE_FIELD=versus race.sh 900
 
 | lane | controller | finished |
 |---|---|---|
-| r1 | dwa-c++ | 13.9 s, 5.98 m |
+| r1 | dwa-c++ | 13.9 s, 5.97 m |
 | r2 | dwa-py | 14.0 s, 6.01 m |
 | r5 | nav2-pursuit | 14.5 s, 5.87 m |
-| r3 | nav2-dwb | did not cross: 5.79 m of 5.80 |
+| r3 | nav2-dwb | did not cross: 5.78 m of 5.80 |
 | r4 | nav2-mppi | did not cross: 2.37 m of 5.80 |
 
 Run to 51.3 s rather than the 25 s the stall rule used to allow, so the two
 that do not cross had twice as long and did not use it.
+
+**Re-raced after the C++ controller's costmap scale was fixed, and the lap did
+not move.** That node compared nav2's 0..100 OccupancyGrid against
+`LETHAL_COST = 253`, so its rollout's collision test was unreachable -- no
+value the costmap can publish would have tripped it. The table above is the
+run after the fix, against 13.9 s / 5.98 m, 5.79 m and otherwise identical
+figures before it: one centimetre on two lanes, which is inside what these
+lanes reproduce to.
+
+That is worth stating rather than quietly restating the numbers, because it
+says what the bug cost and what it did not. On a 1.10 m corridor the soft
+penalty above `WARN_COST` was apparently enough to keep the lane off the
+walls by itself -- a lethal cell scored 0.116 a step against a heading gain of
+5.0, and that plus the reference path was sufficient. What was missing was the
+guarantee, not the behaviour: nothing in that node refused a trajectory
+through a wall, and a course with a tighter gap or a worse path would have
+found it. The fix is in `cpp/src/dwa_controller.cpp` and the same failure is
+recorded in `dwa_controller.py`'s `_costs_from_grid`, which hit it first.
 
 This is the run that checks the optimised rollout loop in a live graph rather
 than in a harness. The four changes in it -- the heading's cos and sin advanced

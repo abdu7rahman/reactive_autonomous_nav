@@ -379,10 +379,10 @@ instead, on the same robot, the same costmap settings and the same path — see
 
 | lane | controller | finished |
 | --- | --- | --- |
-| r1 | dwa-c++ (this repo) | 13.9 s, 5.98 m |
+| r1 | dwa-c++ (this repo) | 13.9 s, 5.97 m |
 | r2 | dwa-py (this repo) | 14.0 s, 6.01 m |
 | r5 | nav2 `RegulatedPurePursuitController` | 14.5 s, 5.87 m |
-| r3 | nav2 `DWBLocalPlanner` | did not cross: 5.79 m of 5.80 |
+| r3 | nav2 `DWBLocalPlanner` | did not cross: 5.78 m of 5.80 |
 | r4 | nav2 `MPPIController` | did not cross: 2.37 m of 5.80 |
 
 Read the second column before the first: DWB drove the whole course and is not
