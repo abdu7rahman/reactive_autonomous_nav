@@ -467,8 +467,9 @@ private:
         // arithmetic: bench/dwa_compare_cpp.cpp's mine_pick_check() runs both
         // forms over 1,944 states and reports the same chosen command in every
         // one of them, worst velocity difference 0, worst score difference
-        // 2.6e-14. Measured on the same window, the four changes together are
-        // 4.1x at 42 trajectories, 4.4x at 420 and 4.5x at 2,550.
+        // 2.6e-14. Measured on the same window, medians of four runs, the four
+        // changes together are 4.6x at 42 trajectories, 5.1x at 420 and 4.8x
+        // at 2,550.
         const double c0 = std::cos(s.yaw), s0 = std::sin(s.yaw);
         for (double w : ws) {
             const double cw = std::cos(w * dt_), sw = std::sin(w * dt_);

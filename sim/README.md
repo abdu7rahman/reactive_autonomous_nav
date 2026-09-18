@@ -275,7 +275,7 @@ RACE_COURSE=chicane RACE_FIELD=versus race.sh 900
 The C++ and Python controllers finish the same course within a tenth of a
 second of each other, which is the answer to the question the lane exists to
 ask: the port is the same controller, not a faster one. Where the C++ is ahead
-is per tick, not per race -- 0.139 ms against 0.961 ms on the same
+is per tick, not per race -- 0.0895 ms against 1.360 ms on the same
 410-trajectory window, in `bench/README.md` -- and on a 6 m course at 0.46 m/s
 neither is anywhere near its budget, so the difference does not show. It would
 on a robot with a 20 ms loop and a 2,500-trajectory window.
