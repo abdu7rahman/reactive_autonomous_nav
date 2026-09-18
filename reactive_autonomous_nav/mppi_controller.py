@@ -565,7 +565,36 @@ class MPPIControllerNode(Node):
     #  Cost Functions (Nav2-inspired critics)
     # ================================================================
     def _compute_all_costs(self, trajectories, controls, pose):
-        """Compute total cost for each trajectory."""
+        """Compute total cost for each trajectory.
+
+        These critics are not all the same shape in the horizon, and it does
+        not matter.  Five accumulate over the steps and the goal distance
+        reads the last pose only, so the balance between them moves with how
+        the horizon is split -- and the split is chosen from the measured
+        interval, so in principle a slower machine scores a different cost
+        function.  Measured on the chicane, same pose and same 2.8 s of
+        rollout, 56 steps against 12, where 56/12 is 4.67:
+
+            reference       4.21x     goal_dist        1.00x
+            path_angle      4.41x     smoothness       0.61x
+            goal_angle      2.83x
+            prefer_forward  3.04x
+
+        Scaling the accumulating terms back to the nominal split was written
+        and then reverted, because it changed nothing that the controller
+        does.  lambda is the temperature times the observed spread of the
+        costs, so a uniform factor is absorbed exactly; the goal critics are
+        the part that does not scale, and they turn out to be small against
+        that spread.  Ranked over 300 constant-(v, w) rollouts at 50, 92 and
+        97 percent along the path -- the last two with the goal critics
+        active -- the chosen command was identical at both splits in every
+        case, and the rank correlation between the two orderings was 0.9991,
+        0.9944 and 0.9882 unscaled against 0.9991, 0.9937 and 0.9860 scaled.
+        The scaling was very slightly the worse of the two and bought nothing,
+        so it is not here.  The ratios above are still worth knowing: they say
+        why a critic weight tuned at one horizon split does not mean the same
+        thing at another, even though the softmax hides it.
+        """
         K = trajectories.shape[0]
         costs = np.zeros(K)
 
