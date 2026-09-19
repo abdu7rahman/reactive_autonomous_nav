@@ -141,8 +141,9 @@ set the timestep its rollouts integrate with from `time.perf_counter()` while
 its timer fires on simulated time, so a 50 ms period read as 233 ms; fixing
 that took its worst deviation from 0.174 m to 0.114 m.
 
-Both courses, both other fields, and what each one cost to get
-running are in [`sim/README.md`](sim/README.md).
+Both courses, the four other fields — this repo's DWA against nav2's twice,
+and the bench's seven implementations split into two — and what each one cost
+to get running are in [`sim/README.md`](sim/README.md).
 
 `astar` with `dwa` is the same configuration in both halves, so it is recorded
 once and shown twice rather than run twice — two runs of one pair would differ
@@ -511,6 +512,11 @@ The `cpp/` directory contains a separate ROS2 C++ package (`reactive_nav_cpp`) w
 | A* global planner | `cpp/src/astar_planner.cpp` |
 | SMAC hybrid A* planner | `cpp/src/smac_planner.cpp` |
 | DWA local controller | `cpp/src/dwa_controller.cpp` |
+| Baseline host, for the bench race fields | `cpp/src/baseline_controller.cpp` |
+
+The last of those is not a port of anything here: it hosts CppRobotics,
+goktug97 and amslabtech as race lanes by calling `bench/baseline_*.cpp`'s
+`step_*`, and it only builds once `bench/fetch_baselines.sh` has fetched them.
 
 Build and run the C++ package:
 ```bash
@@ -537,10 +543,23 @@ rather than language: the port also added a closed set, so it expands 21,015
 nodes where Python expands 61,631 on the same map. `bench/run.sh` prints both
 tables.
 
-On the same course in Gazebo the two DWA implementations finish within 0.2 s of
+On the same course in Gazebo the two DWA implementations finish within 0.1 s of
 each other, because a 6 m course at 0.46 m/s is nowhere near either one's
 budget — see **The versus field** above. The per-tick margin is what buys
 headroom on a robot with a 20 ms loop, not a faster lap.
+
+**One bug in that port outlived the benchmarks that were supposed to catch
+it.** It compared nav2's `/…/costmap` — a `nav_msgs/OccupancyGrid`, 0–100 —
+against `LETHAL_COST = 253`, so its rollout's collision test could not fire on
+any value a costmap can publish. The benchmarks never saw it because
+`bench/maps.py` builds its grids on the raw 0–255 scale and none of the C++
+bench paths goes through a ROS callback, so the bug lived exactly in the gap
+between them. The Python controller had the same bug once and its
+`_costs_from_grid` records it; the port never got that fix. Re-racing the
+versus field after fixing it moved the lap by one centimetre — the soft
+penalty above `WARN_COST` had been carrying it — so what the bug cost was the
+guarantee, not the behaviour. [`sim/README.md`](sim/README.md) has the
+measurement and what it did and did not invalidate.
 
 ---
 

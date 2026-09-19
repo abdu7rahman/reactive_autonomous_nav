@@ -1,12 +1,15 @@
 # Running the stack in Gazebo
 
-Twelve recordings of this package driving TurtleBot 4s through the warehouse
-world: five global planners against one controller, five local controllers
-against one planner, and then all five controllers at once, on five robots,
-twice — up a clear six-metre straight, and through a chicane every one of them
-is handed the same path through. Every clip is one run of `nav_launch.py` or
-`race_launch.py` with nothing stubbed — the same nodes, the same costmaps, the
-same `/goal_pose` in and `/cmd_vel_unstamped` out as on hardware.
+Fifteen recordings of this package driving TurtleBot 4s through the warehouse
+world. Nine are one robot: five global planners against one controller and
+five local controllers against one planner, which is the same pair twice and
+so nine runs rather than ten. Six are grids released together — this package's
+five controllers up a clear six-metre straight and through a chicane, its DWA
+against nav2's own controllers twice, and the seven implementations
+`bench/README.md` compares put on robots instead of on a drawn field. Every
+clip is one run of `nav_launch.py` or `race_launch.py` with nothing stubbed —
+the same nodes, the same costmaps, the same `/goal_pose` in and
+`/cmd_vel_unstamped` out as on hardware.
 
 ROS 2 Jazzy, Gazebo Harmonic 8.15.0, `turtlebot4_gz_bringup`'s warehouse world,
 TurtleBot 4 standard. Rendering is software (llvmpipe), which is why the world
@@ -24,6 +27,17 @@ bash sim/all.sh                          # all ten
 
 `sim_up.sh` is a one-off; `drive.sh` may be run repeatedly against it and
 resets the robot to the warehouse origin each time.
+
+A race is its own world, because the grid has to start on the start line:
+
+```bash
+RACE_COURSE=chicane RACE_FIELD=versus race_up.sh   # tears the old world down first
+RACE_COURSE=chicane RACE_FIELD=versus race.sh 900
+```
+
+`RACE_FIELD` is `ours`, `versus`, `nav2`, `bench-py` or `bench-cpp`, and both
+scripts need the same one: it decides how many lanes there are as well as who
+is in them. `RACE_COURSE` is `straight` or `chicane`.
 
 ## The runs
 
@@ -775,7 +789,7 @@ do.
 measurement that is about planners and controllers, and the dock episode above
 is what happens when wheel odometry is trusted alone.
 
-## Three things the exercise found in the package itself
+## Four things the exercise found in the package itself
 
 **Every lethal-obstacle threshold was unreachable.** The planners, DWA and MPPI
 compare costmap cells against `LETHAL_COST = 253`, which is the raw nav2 0-255
@@ -797,6 +811,43 @@ inverting nav2's own forward map (`255 -> -1, 254 -> 100, 253 -> 99, else
 c*99/252`). No threshold changed. `bench/` feeds grids straight into
 `node.global_data` and never goes through these callbacks, so the benchmark
 path is untouched — `bench/test_planners.py` still reports `all checks passed`.
+
+**And the C++ port never got that fix.** `cpp/src/dwa_controller.cpp` is the
+same thirteen-places problem one language over: it read `local_map_->data[...]`
+straight into `cost >= LETHAL_COST`, so the highest value that can arrive was
+100 against a threshold of 253 and the collision test in its rollout could not
+fire whatever the costmap said. Measured on a live race costmap, 14,400 cells:
+max 100, with 1,135 cells at 99 (inscribed) and 88 at 100 (lethal), none of
+which that node would have refused. What was left was the soft penalty above
+`WARN_COST`, which for a lethal cell is (100 - 80) / 173 = 0.116 a step against
+a heading gain of 5.0.
+
+It went unseen for as long as it did because it cost nothing visible. The
+versus field re-raced after the fix reads 13.9 s / 5.97 m against 13.9 s /
+5.98 m before it, and the four other lanes are identical: one centimetre,
+inside what these lanes reproduce to. On a 1.10 m corridor with a reference
+path to follow, 0.116 a step and the heading term were enough by themselves.
+What the bug removed was the guarantee rather than the behaviour -- nothing in
+that node refused a trajectory through a wall -- and a tighter gap or a worse
+path would have collected on it. The conversion now happens once on receipt
+rather than at every lookup, which also takes it off the rollout's inner loop.
+
+`bench/` is untouched for the same reason it was the first time: `maps.py`
+builds its grids on the raw scale and `dwa_compare_cpp.cpp` never goes through
+a ROS callback, so every C++ bench table is measured on the scale it assumes.
+
+**What that fix did and did not invalidate**, since a costmap bug in a
+controller sounds like it should invalidate every clip on this page. Three
+races ran that node: the versus field, and the two bench fields, and all three
+were re-raced. Nothing else did. The nav2 field's r1 is `('pkg', 'dwa')` --
+the Python controller -- and the ten single-robot clips come up through
+`launch/nav_launch.py`, which instantiates `reactive_autonomous_nav` nodes and
+nothing else, so no C++ controller was ever in them. `RACE_FIELD=ours` on
+either course is five Python controllers for the same reason. Re-recording
+thirteen clips that could not have moved would be about two hours of simulator
+for no new information, and a reader who wants to check that reasoning can
+read the field table at the top of `race_course.py` and the two `Node(...)`
+calls in `nav_launch.py` rather than take it on trust.
 
 **TEB told nobody it had arrived.** teb_controller published its status on
 /teb_status while every planner subscribes to /dwa_status -- which dwa,
@@ -872,14 +923,16 @@ hoping.
 | `stopall.sh` | stop the chained bringup-and-batch runner and everything under it |
 | `nav.rviz` | one view covering every planner's and controller's own markers |
 | `lib.sh` | process helpers, and the Fast DDS profile every process picks up |
-| `race_up.sh` | the warehouse, five robots, the clock bridge and the odom pins |
+| `race_up.sh` | the warehouse, the field's robots, the clock bridge and the odom pins |
 | `race.sh` | the race: costmaps, planners, controllers, RViz, capture, encode |
+| `../reactive_autonomous_nav/baseline_controller.py` | PythonRobotics and kmilo7204, hosted as a lane |
+| `../cpp/src/baseline_controller.cpp` | CppRobotics, goktug97 and amslabtech, hosted as a lane |
 | `stoprace.sh` | stop a race and everything it started, leaving the world up |
 | `race_robot.py` | the TurtleBot 4 description, stripped to what a race uses |
 | `grid_tf.py` | publishes the course: odom pins, the chicane, the name labels |
 | `race_timer.py` | releases the grid and times it against the robots' odometry |
 | `race_path.py` | the chicane's one reference path, and the check that it is clear |
-| `race_rviz.py` | generates the race view: five robots, one colour and one label each |
+| `race_rviz.py` | generates the race view: one colour and one label per lane |
 | `send_goal.py` | sends a goal and waits for the plan that proves it arrived |
 | `clip_table.py` | prints the ten-clip table from the batch log and the files |
 | `fastdds_udp.xml` | UDP only, because shared memory ran out of ports |

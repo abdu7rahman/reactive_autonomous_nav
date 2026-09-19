@@ -16,7 +16,16 @@ python3 bench/sweep_stanley.py     # Stanley's k, k_soft, wheelbase
 python3 bench/sweep_teb.py         # TEB's acceleration edges and vertex spacing
 python3 bench/sweep_mppi.py        # MPPI's temperature, against effective sample size
 python3 bench/chase_mppi.py       # the site's cursor-chase plate, both weightings
+
+python3.12 bench/gif_compare.py    # the seven, driven across one field and drawn
+python3.12 bench/gif_compare.py --cpp
 ```
+
+The same seven can be driven on robots instead of on a field: see
+`RACE_FIELD=bench-py` and `bench-cpp` in `../sim/README.md`. Those hosts call
+the code here -- `baselines_py.py` for the Python two, `baseline_*.cpp`'s
+`step_*` for the C and C++ three -- so a race and a figure cannot disagree
+about what an implementation does.
 
 The sweeps exist because a controller that carries a published name should
 carry its published constants, and picking those by eye is how Stanley's gain
@@ -572,12 +581,13 @@ both report 410.
 | `maps.py` | Mazes, room maps, costmap inflation |
 | `test_planners.py` | The correctness suite |
 | `test_dwa_window.py` | DWA's reachable window, orbit detection, closed loop |
-| `test_chicane.py` | The five-robot race's reference path, driven before the simulator sees it |
+| `test_chicane.py` | The race's reference path, driven before the simulator sees it |
 | `test_views.py` | Every RViz display against the package's own publishers |
 | `chase_mppi.py` | The site's chase plate: both MPPI weightings, and the goal snap |
 | `dwa_compare.py` | vs PythonRobotics and kmilo7204, in Python |
+| `baselines_py.py` | fetches those two, for this harness and for the live race |
 | `dwa_compare_cpp.cpp`, `baseline_*.cpp` | vs CppRobotics, goktug97 and amslabtech, and `--trace` for the figures |
-| `trace.h` | one closed loop and one clamped plant, shared by the four C++ traces |
+| `trace.h` | one closed loop, one clamped plant and one tick, shared by the four C++ traces and by the race that hosts them |
 | `gif_compare.py` | drives all seven across one field and draws it |
 | `nav2_maps.py`, `nav2_compare.py` | vs the Nav2 Smac Planner paper |
 | `bench_astar.*`, `bench_dwa.*` | Python vs C++ latency |
