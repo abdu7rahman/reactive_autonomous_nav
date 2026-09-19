@@ -164,11 +164,18 @@ simulation is also what turned up the two bugs fixed in `fix(costmap)` and
 ## How it compares
 
 Everything below is reproducible from `bench/` — `bash bench/run.sh` regenerates
-every number on this page. Taken on an Intel Xeon @ 2.80 GHz, g++ 13.3 `-O2`,
+every number on this page. Taken on an Intel Xeon @ 2.10 GHz, g++ 13.3 `-O2`,
 Python 3.11 with numpy 2.4, except the two figures, which are python3.12 with
-numpy 1.26.4 because matplotlib here is built for 3.12. The line above used to
-read 2.10 GHz and was not re-checked against `/proc/cpuinfo` when the sweeps
-were re-run; it is the ratios that carry the claims, for exactly this reason.
+numpy 1.26.4 because matplotlib here is built for 3.12.
+
+Read that clock as a label. The machine before this one reported 2.80 GHz and
+ran these benchmarks about half as quickly, so the frequency is not what the
+timings depend on — it is a shared host. Across that change the ratios moved
+too, by up to 40% and in both directions, on provably identical work;
+`bench/README.md` has the per-implementation numbers. What did not move is
+everything that is not a clock: the trails in the figures, the expansion
+counts, the work-per-trajectory table, and every finishing time in `sim/`,
+which are simulated seconds.
 
 ### Local controller vs other DWA implementations
 
@@ -179,24 +186,30 @@ pulls the Python ones at run time. Only their plotting is stripped; the planner
 functions are theirs.
 
 Every number is the median of four runs in one sequential sweep. One sweep
-matters: on this host the same scripts against the same code measured 1.52 to
-1.69 times faster earlier the same day, while every trail in the figures below
-came out identical to the centimetre. The absolutes drift with the machine and
-the ratios do not.
+matters: on one host the same scripts against the same code measured 1.52 to
+1.69 times faster earlier the same day, and a container restart onto another
+machine moved them again by about half — while every trail in the figures
+below came out identical to the centimetre through all of it. The absolutes
+drift with the machine. So do some of the ratios, by up to 40%; which ones,
+and by how much, is at the foot of `bench/README.md`.
 
 **C and C++**, per trajectory — `bench/dwa_compare_cpp.cpp`
 
 | Trajectories | This repo | [CppRobotics](https://github.com/onlytailei/CppRobotics) | [goktug97](https://github.com/goktug97/DynamicWindowApproach) (C) | [amslabtech](https://github.com/amslabtech/dwa_planner) |
 | ---: | ---: | ---: | ---: | ---: |
-| 42 | **0.190 µs** | 2.389 µs | 5.760 µs | 15.569 µs |
-| 110 | **0.209 µs** | 2.678 µs | 6.216 µs | 15.100 µs |
-| 420 | **0.220 µs** | 2.328 µs | 6.227 µs | 15.640 µs |
-| 930 | **0.217 µs** | 2.474 µs | 6.354 µs | 15.417 µs |
-| 2,550 | **0.201 µs** | 2.519 µs | 6.419 µs | 15.267 µs |
+| 42 | **0.143 µs** | 2.292 µs | 4.100 µs | 8.069 µs |
+| 110 | **0.141 µs** | 2.561 µs | 4.111 µs | 8.180 µs |
+| 420 | **0.138 µs** | 2.248 µs | 4.241 µs | 8.217 µs |
+| 930 | **0.135 µs** | 2.248 µs | 4.179 µs | 8.289 µs |
+| 2,550 | **0.140 µs** | 2.465 µs | 4.234 µs | 8.150 µs |
 
-10.6 to 12.8× CppRobotics, 28 to 32× goktug97, 71 to 82× amslabtech, and every
-column flat across a 61× range in trajectory count — the check that these are
-per-trajectory costs and not per-call overhead divided by a number. Per
+16.0 to 18.2× CppRobotics, 28.7 to 30.8× goktug97, 56.5 to 61.2× amslabtech,
+and every column flat across a 61× range in trajectory count — the check that
+these are per-trajectory costs and not per-call overhead divided by a number.
+Those three multiples are not equally durable, and `bench/README.md` has the
+measurement: a container restart onto another machine left the goktug97 ratio
+where it was and moved the other two in opposite directions, on identical
+work. Per
 trajectory because the four do not evaluate the same number of them from one
 window: four loop constructions disagree about their own bounds, 420 against
 400, 361 and 400 at side 20, and the binary prints all four counts above its
@@ -217,7 +230,7 @@ nothing in a column of milliseconds would have shown it.
 controller decides: cos and sin of the heading advanced by one rotation per
 step rather than recomputed from the angle, a squared arrival test instead of
 `hypot`, and the inflation penalty and costmap index scaled by precomputed
-reciprocals. 4.6× at 42 trajectories, 5.1× at 420, 4.8× at 2,550.
+reciprocals. 3.7× at 42 trajectories, 4.0× at 420, 3.9× at 2,550.
 `mine_pick_check()` runs the plain and optimised forms over 1,944 states and
 gets the same chosen command in **all 1,944**, worst score difference
 2.6 × 10⁻¹⁴, and refuses to print a table if they ever disagree.
@@ -226,32 +239,32 @@ gets the same chosen command in **all 1,944**, worst score difference
 
 | Trajectories | This repo | [PythonRobotics](https://github.com/AtsushiSakai/PythonRobotics) | [kmilo7204](https://github.com/kmilo7204/dwa_planner) |
 | ---: | ---: | ---: | ---: |
-| 36 | **0.47 ms** | 4.17 ms | 6.58 ms |
-| 100 | **0.58 ms** | 13.24 ms | 18.24 ms |
-| 400 | **1.19 ms** | 59.59 ms | 73.70 ms |
-| 900 | **2.87 ms** | 140.91 ms | 166.51 ms |
-| 2,500 | **7.29 ms** | 396.58 ms | 463.89 ms |
+| 36 | **0.24 ms** | 2.21 ms | 3.62 ms |
+| 100 | **0.30 ms** | 7.24 ms | 10.20 ms |
+| 400 | **0.67 ms** | 32.50 ms | 38.21 ms |
+| 900 | **1.66 ms** | 72.84 ms | 88.55 ms |
+| 2,500 | **4.28 ms** | 203.63 ms | 245.43 ms |
 
-Per-cell spread: 5.5% median, 22% worst.
+Per-cell spread over four runs: 8.8% median, 33% worst.
 
 The structure behind the gaps is that every baseline keeps an explicit obstacle
 list and measures each rollout point against every obstacle, while this repo
 reads one costmap cell. amslabtech does that per point in C++ with no
-vectorisation, which is the 71 to 82×. goktug97 walks a point cloud per sample,
-which is the 28 to 32×. PythonRobotics vectorises the comparison over numpy and
+vectorisation, which is the 56.5 to 61.2×. goktug97 walks a point cloud per
+sample, which is the 28.7 to 30.8×. PythonRobotics vectorises the comparison over numpy and
 kmilo7204 does not, which is why they sit where they do relative to each other.
 It shows up directly as flat scaling in clutter (Python side, 400
 trajectories):
 
 | Obstacles | This repo | PythonRobotics | kmilo7204 |
 | ---: | ---: | ---: | ---: |
-| 20 | 1.17 ms | 53.32 ms | 66.55 ms |
-| 100 | 1.17 ms | 65.29 ms | 86.59 ms |
-| 500 | 1.17 ms | 129.35 ms | 153.00 ms |
-| 2,000 | 1.17 ms | **538.28 ms** | **703.04 ms** |
+| 20 | 0.62 ms | 27.41 ms | 35.85 ms |
+| 100 | 0.62 ms | 34.16 ms | 42.38 ms |
+| 500 | 0.62 ms | 62.55 ms | 77.29 ms |
+| 2,000 | 0.62 ms | **299.16 ms** | **411.35 ms** |
 
 Flat versus linear, across a hundredfold change in obstacle count against a
-10.3% median spread on the same cells. A costmap has to be built and maintained
+8.1% median spread on the same cells. A costmap has to be built and maintained
 by something else first, so this is a trade rather than a free win.
 
 ### What each of them does, not just how long it takes
@@ -281,8 +294,8 @@ that arrive.
 
 The two implementations of this repo's own controller finish within 0.2 s and
 2 cm of each other, which is the cross-check that matters most: the C++ port is
-the same controller. In these two runs it scores its window in 0.04 ms a tick
-against 1.01 for the Python one, on the 246 trajectories the acceleration limit
+the same controller. In these two runs it scores its window in 0.03 ms a tick
+against 0.51 for the Python one, on the 246 trajectories the acceleration limit
 leaves at this speed; the bench's own figure, on a fixed 410-trajectory window,
 is in **C++ Implementations** below. Both trails are identical to the run
 before the rollout loop was optimised, which is what says the optimisation
@@ -344,16 +357,19 @@ that map and query geometry — 2000 × 2000 cells, 100 × 100 m, and the same
 
 | Obstacle density | This repo, C++ A\* | Nav2 Smac 2D-A\* | Nav2 NavFn | Nav2 Hybrid-A\* |
 | ---: | ---: | ---: | ---: | ---: |
-| 10% | **12.7 ms** | 66.2 ms | 71.1 ms | 39.1 ms |
-| 15% | **19.2 ms** | 85.6 ms | 66.5 ms | 40.7 ms |
-| 20% | **25.2 ms** | 88.8 ms | 61.0 ms | 38.8 ms |
+| 10% | **6.8 ms** | 66.2 ms | 71.1 ms | 39.1 ms |
+| 15% | **11.0 ms** | 85.6 ms | 66.5 ms | 40.7 ms |
+| 20% | **14.9 ms** | 88.8 ms | 61.0 ms | 38.8 ms |
 
-Mean over the 1,000 pairs, median of five runs, reproducing to 6.3%, 2.1% and
-4.0%. The rows this table carried until now — 7.3, 12.0 and 21.3 — were a
-median of eight pairs drawn from a 50 ± 6 m band, which was neither the
-paper's sample count, nor its sampling, nor the statistic a 1,000-pair table
-reports; the same eight pairs on the same seeded maps printed 9.7, 10.6, 10.6
-and 13.1 ms on the 15% row across four runs of unchanged code.
+Mean over the 1,000 pairs, median of five runs, reproducing to 5.9%, 10.9%
+and 4.0%. This row read 7.3, 12.0 and 21.3 while it was a median of eight
+pairs drawn from a 50 ± 6 m band, which was neither the paper's sample count,
+nor its sampling, nor the statistic a 1,000-pair table reports — the same
+eight pairs on the same seeded maps printed 9.7, 10.6, 10.6 and 13.1 ms on
+the 15% row across four runs of unchanged code. Run as the paper specifies
+it, the same command gave 12.7, 19.2 and 25.2 ms on the machine before this
+one: the method changed once and the host changed once, and only the first is
+a correction.
 
 **Read that with the caveats**, and the first one is in the path length rather
 than the clock. These paths run 54.8, 55.5 and 57.5 m where Smac 2D-A\*
@@ -531,16 +547,18 @@ ros2 run reactive_nav_cpp astar_planner
 ros2 run reactive_nav_cpp dwa_controller
 ```
 
-The C++ DWA is 15× lower latency than the Python one on the same
-410-trajectory acceleration-limited window — 0.0895 ms against 1.360 ms — and
-13× on the full 2,626-trajectory velocity space, the gap narrowing with batch
+The C++ DWA is 11× lower latency than the Python one on the same
+410-trajectory acceleration-limited window — 0.0665 ms against 0.7495 ms — and
+11× on the full 2,626-trajectory velocity space, the gap narrowing with batch
 size because numpy's fixed per-call overhead amortises away. It was 7× and 4×
 before the rollout loop was optimised, and before `bench_dwa.cpp` turned out
 to be a third copy of that loop still scoring the form the controller replaced,
 so the row had been comparing Python's current scoring against C++'s old one.
-The C++ A\* is 118-239× on the shared maps, of which roughly 3× is algorithmic
+The C++ A\* is 102-193× on the shared maps, of which roughly 3× is algorithmic
 rather than language: the port also added a closed set, so it expands 21,015
-nodes where Python expands 61,631 on the same map. `bench/run.sh` prints both
+nodes where Python expands 61,631 on the same map — the two expansion counts
+are the same on every host, because the search is deterministic and only the
+clock moves. `bench/run.sh` prints both
 tables.
 
 On the same course in Gazebo the two DWA implementations finish within 0.1 s of

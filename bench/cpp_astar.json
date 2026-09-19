@@ -1,5 +1,5 @@
 [
- {"map": "128x128", "ms": 0.082, "min_ms": 0.079, "expanded": 421, "path_cells": 123},
- {"map": "256x256", "ms": 1.317, "min_ms": 1.272, "expanded": 4814, "path_cells": 287},
- {"map": "384x384", "ms": 5.189, "min_ms": 5.094, "expanded": 21015, "path_cells": 462}
+ {"map": "128x128", "ms": 0.046, "min_ms": 0.040, "expanded": 421, "path_cells": 123, "path_len_cells": 171.7},
+ {"map": "256x256", "ms": 0.961, "min_ms": 0.932, "expanded": 4814, "path_cells": 287, "path_len_cells": 373.8},
+ {"map": "384x384", "ms": 3.858, "min_ms": 3.847, "expanded": 21015, "path_cells": 462, "path_len_cells": 583.2}
 ]

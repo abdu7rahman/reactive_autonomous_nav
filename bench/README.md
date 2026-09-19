@@ -154,11 +154,17 @@ the C and C++ ones, and `bench/dwa_compare.py` pulls the Python ones at run
 time. Only their plotting is stripped; the planner functions are theirs.
 
 Every number below is the median of four full runs taken in one sequential
-sweep, with the per-cell spread beside it. One sweep matters: on this host the
+sweep, with the per-cell spread beside it. One sweep matters: on one host the
 same scripts against the same code measured 1.52 to 1.69 times faster earlier
-the same day, while every trail in the closed-loop figures came out identical
-to the centimetre, so the absolutes drift with the machine and the ratios do
-not. Read the ratios.
+the same day, and a container restart onto another machine moved them again by
+about half, while every trail in the closed-loop figures came out identical to
+the centimetre through all of it.
+
+The absolutes drift with the machine, and so do some of the ratios -- which is
+a correction to what this paragraph used to say. The note at the foot of this
+page has the per-implementation measurement: across one machine change, on
+identical work, one of the three ratios below did not move and the other two
+moved about 40% in opposite directions. Read the order of the columns.
 
 ### The comparison was not comparing
 
@@ -205,9 +211,9 @@ Four changes, none of which alter what the controller decides:
 
 | Trajectories | Before | After | |
 | ---: | ---: | ---: | ---: |
-| 42 | 0.037 ms | **0.008 ms** | 4.6× |
-| 420 | 0.400 ms | **0.079 ms** | 5.1× |
-| 2,550 | 2.392 ms | **0.495 ms** | 4.8× |
+| 42 | 0.023 ms | **0.006 ms** | 3.7× |
+| 420 | 0.241 ms | **0.061 ms** | 4.0× |
+| 2,550 | 1.477 ms | **0.374 ms** | 3.9× |
 
 `mine_pick_check()` runs both forms over 1,944 start states and lookahead
 points and reports the chosen command in each: **identical in all 1,944**,
@@ -245,18 +251,41 @@ amslabtech walks `side × side` exactly. At side 20 that is 420, 400, 361 and
 
 | Trajectories | This repo | CppRobotics | goktug97 | amslabtech |
 | ---: | ---: | ---: | ---: | ---: |
-| 42 | **0.190 µs** | 2.389 µs | 5.760 µs | 15.569 µs |
-| 110 | **0.209 µs** | 2.678 µs | 6.216 µs | 15.100 µs |
-| 420 | **0.220 µs** | 2.328 µs | 6.227 µs | 15.640 µs |
-| 930 | **0.217 µs** | 2.474 µs | 6.354 µs | 15.417 µs |
-| 2,550 | **0.201 µs** | 2.519 µs | 6.419 µs | 15.267 µs |
+| 42 | **0.143 µs** | 2.292 µs | 4.100 µs | 8.069 µs |
+| 110 | **0.141 µs** | 2.561 µs | 4.111 µs | 8.180 µs |
+| 420 | **0.138 µs** | 2.248 µs | 4.241 µs | 8.217 µs |
+| 930 | **0.135 µs** | 2.248 µs | 4.179 µs | 8.289 µs |
+| 2,550 | **0.140 µs** | 2.465 µs | 4.234 µs | 8.150 µs |
 
-**10.6 to 12.8× CppRobotics, 28 to 32× goktug97, 71 to 82× amslabtech**, and
-every column flat across a 61× range in trajectory count, which is the check
-that these are per-trajectory costs and not per-call overhead divided by a
-number. Per-cell spread is 2 to 9% at 420 trajectories and above; the 42 and
-110 rows reach 25 and 126% because a call there takes 8 to 23 µs and the
-`steady_clock` resolution shows.
+**16.0 to 18.2× CppRobotics, 28.7 to 30.8× goktug97, 56.5 to 61.2×
+amslabtech**, and every column flat across a 61× range in trajectory count,
+which is the check that these are per-trajectory costs and not per-call
+overhead divided by a number. This repo's own column is flat to 6% --
+0.135 to 0.143 µs across sixty-fold -- which is the flattest it has measured.
+Per-cell spread over the four runs: 12.0% median, 14.3% worst.
+
+**Those three ratios are not equally stable, and that is worth more than the
+numbers.** The same table on the host this repo was benchmarked on until
+tonight read 10.6 to 12.8×, 28 to 32× and 71 to 82×. A container restart put
+it on a different machine and the middle one did not move, while the other
+two went in opposite directions. What changed per implementation, per
+trajectory at side 20:
+
+| | before | after | |
+| --- | ---: | ---: | --- |
+| this repo | 0.220 µs | 0.138 µs | 1.59× quicker |
+| CppRobotics | 2.328 µs | 2.248 µs | unchanged |
+| goktug97 | 6.227 µs | 4.241 µs | 1.47× quicker |
+| amslabtech | 15.640 µs | 8.217 µs | 1.90× quicker |
+
+The work is identical -- the points, checks and bail rates in the table above
+this one come out the same on both hosts, so nothing is evaluating less. Four
+implementations of one algorithm, on one machine change, moved by between 1.0
+and 1.83 times. So a ratio between two of them is a property of the pair *and*
+the machine, and quoting one to three significant figures across hosts would
+be inventing precision. Read these as "this repo is more than an order of
+magnitude ahead of the C and C++ baselines, and the margin depends on which
+baseline and which machine", which is what two hosts support.
 
 Two earlier versions of this table are worth recording, because both were
 wrong and neither was wrong at random:
@@ -279,26 +308,27 @@ took.
 
 | Trajectories | This repo | [PythonRobotics](https://github.com/AtsushiSakai/PythonRobotics) | [kmilo7204](https://github.com/kmilo7204/dwa_planner) |
 | ---: | ---: | ---: | ---: |
-| 36 | **0.47 ms** | 4.17 ms | 6.58 ms |
-| 100 | **0.58 ms** | 13.24 ms | 18.24 ms |
-| 400 | **1.19 ms** | 59.59 ms | 73.70 ms |
-| 900 | **2.87 ms** | 140.91 ms | 166.51 ms |
-| 2,500 | **7.29 ms** | 396.58 ms | 463.89 ms |
+| 36 | **0.24 ms** | 2.21 ms | 3.62 ms |
+| 100 | **0.30 ms** | 7.24 ms | 10.20 ms |
+| 400 | **0.67 ms** | 32.50 ms | 38.21 ms |
+| 900 | **1.66 ms** | 72.84 ms | 88.55 ms |
+| 2,500 | **4.28 ms** | 203.63 ms | 245.43 ms |
 
-Per-cell spread: 5.5% median, 22% worst.
+Per-cell spread over four runs: 8.8% median, 33% worst, the worst being the
+400-trajectory cell of this repo's own column.
 
 It shows up directly as flat scaling in clutter (Python side, 400
 trajectories):
 
 | Obstacles | This repo | PythonRobotics | kmilo7204 |
 | ---: | ---: | ---: | ---: |
-| 20 | 1.17 ms | 53.32 ms | 66.55 ms |
-| 100 | 1.17 ms | 65.29 ms | 86.59 ms |
-| 500 | 1.17 ms | 129.35 ms | 153.00 ms |
-| 2,000 | **1.17 ms** | 538.28 ms | **703.04 ms** |
+| 20 | 0.62 ms | 27.41 ms | 35.85 ms |
+| 100 | 0.62 ms | 34.16 ms | 42.38 ms |
+| 500 | 0.62 ms | 62.55 ms | 77.29 ms |
+| 2,000 | **0.62 ms** | 299.16 ms | **411.35 ms** |
 
 Flat versus linear, and flat across a hundredfold change in obstacle count
-against a 10.3% median spread on the same cells. A costmap has
+against an 8.1% median spread on the same cells. A costmap has
 to be built and maintained by something else first, so this is a trade rather
 than a free win.
 
@@ -352,20 +382,22 @@ together show against a controller alone.
 
 | | given | time | driven | ms/tick | rollouts | outcome |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
-| this repo (Python) | route | 28.1 s | 13.29 m | 1.01 | 246 | arrived |
-| PythonRobotics | goal | 55.0 s | 19.16 m | 39.01 | 234 | arrived |
-| kmilo7204 | goal | 71.4 s | 18.70 m | 42.19 | 234 | arrived |
-| this repo (C++) | route | 28.3 s | 13.31 m | **0.04** | 246 | arrived |
-| CppRobotics | goal | 90.1 s | 3.87 m | 0.25 | 190 | 9.72 m short |
-| goktug97 | goal | 90.1 s | 3.20 m | 0.35 | 152 | 10.37 m short |
-| amslabtech | goal | 29.5 s | 13.63 m | 1.10 | 234 | arrived |
+| this repo (Python) | route | 28.1 s | 13.29 m | 0.51 | 246 | arrived |
+| PythonRobotics | goal | 55.0 s | 19.16 m | 22.29 | 234 | arrived |
+| kmilo7204 | goal | 71.4 s | 18.70 m | 23.38 | 234 | arrived |
+| this repo (C++) | route | 28.3 s | 13.31 m | **0.03** | 246 | arrived |
+| CppRobotics | goal | 90.1 s | 3.87 m | 0.23 | 190 | 9.72 m short |
+| goktug97 | goal | 90.1 s | 3.20 m | 0.27 | 152 | 10.37 m short |
+| amslabtech | goal | 29.5 s | 13.63 m | 0.63 | 234 | arrived |
 
 The route is 13.83 m. The two implementations of this repo's controller agree
 to 2 cm and 0.2 s on the same field, which is the cross-check that matters
-most here, and the C++ one does it in 0.04 ms a tick against 1.01. Those two
-trails were identical on every seed before and after the rollout loop was
-optimised, and identical again on a host running 1.6× slower, which is what
-says the optimisation changed the cost and not the controller.
+most here, and the C++ one does it in 0.03 ms a tick against 0.51. Every
+column in this table except ms/tick is the same on both machines and on every
+seed, before and after the rollout loop was optimised -- same times, same
+distances, same rollout counts, same outcomes. Only the clock column moves,
+which is what says the optimisation changed the cost and not the controller,
+and what says the same of the host.
 
 Two of the four C and C++ ones cross about 3 m and then crawl, and the reason
 is worth more than the outcome. CppRobotics scores `to_goal_cost + speed_cost
@@ -428,8 +460,9 @@ of those would have flattered this repo by a factor of three.
 | 7 | 28.1 s, 13.29 m | 55.0 s, 19.16 m | 71.4 s, 18.70 m |
 | 11 | 27.6 s, 13.39 m | 7.16 m short | 9.64 m short |
 
-Every cell in that table is unchanged from the run before the optimisation and
-before the host slowed down. The figures' ms/tick moved; nothing else did.
+Every cell in that table is unchanged from the run before the optimisation,
+from the host before this one, and from the host before that. The figures'
+ms/tick moved three times; nothing else has moved once.
 
 Four arrangements were measured and rejected before this one, and they are in
 the docstring of `gif_compare.py` because each is a way to make this figure
@@ -501,21 +534,25 @@ in a 100 × 100 m square average 52.1 m apart; these three maps measure 51.9,
 
 | Density | This repo, C++ A\* | Smac 2D-A\* | NavFn | Hybrid-A\* | SBPL ARA\* |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 10% | **12.7 ms** | 66.2 ms | 71.1 ms | 39.1 ms | 5,640 ms |
-| 15% | **19.2 ms** | 85.6 ms | 66.5 ms | 40.7 ms | 6,587 ms |
-| 20% | **25.2 ms** | 88.8 ms | 61.0 ms | 38.8 ms | 6,633 ms |
+| 10% | **6.8 ms** | 66.2 ms | 71.1 ms | 39.1 ms | 5,640 ms |
+| 15% | **11.0 ms** | 85.6 ms | 66.5 ms | 40.7 ms | 6,587 ms |
+| 20% | **14.9 ms** | 88.8 ms | 61.0 ms | 38.8 ms | 6,633 ms |
 
 Mean over the 1,000 pairs, median of five runs, and the rows reproduce to
-6.3%, 2.1% and 4.0% across those five. The mean is the statistic because a
+5.9%, 10.9% and 4.0% across those five. The mean is the statistic because a
 1,000-pair table is an average, and because it is the steadier one here: the
 distribution is heavy enough that at 10% density the per-query median is
-6.4 ms against a 12.7 ms mean, and a median over a small sample of that
-jumps between neighbouring queries. That is not a hypothetical. The figures
-this table carried until now — 7.3, 12.0 and 21.3 ms — were a median of
-**eight** pairs drawn from a 50 ± 6 m band, and all three of those choices
-were wrong: the count, the sampling and the statistic. The same eight pairs
-on the same seeded maps printed 9.7, 10.6, 10.6 and 13.1 ms on the 15% row
-across four runs of unchanged code.
+2.6 ms against a 6.8 ms mean, and a median over a small sample of that
+jumps between neighbouring queries. That is not a hypothetical. This row has
+had three sets of figures and only the last two are comparable. It read 7.3,
+12.0 and 21.3 ms while it was a median of **eight** pairs drawn from a 50 ±
+6 m band, and all three of those choices were wrong -- the count, the
+sampling and the statistic -- to the point that the same eight pairs on the
+same seeded maps printed 9.7, 10.6, 10.6 and 13.1 ms on the 15% row across
+four runs of unchanged code. Run as the paper specifies it, the same command
+gave 12.7, 19.2 and 25.2 ms on the machine before this one and 6.8, 11.0 and
+14.9 here: the method changed once, the host changed once, and only the
+first of those is a correction.
 
 And the column that decides whether this is a fair race at all, which the
 band sampling had made agree with the paper by construction:
@@ -542,9 +579,9 @@ worse path.
 
 | Map | Python A\* | C++ A\* | Speedup |
 | --- | ---: | ---: | ---: |
-| 128 × 128 | 9.84 ms | 0.080 ms | 123× |
-| 256 × 256 | 157.25 ms | 1.329 ms | 118× |
-| 384 × 384 | 1,244.02 ms | 5.201 ms | 239× |
+| 128 × 128 | 6.50 ms | 0.046 ms | 141× |
+| 256 × 256 | 98.40 ms | 0.961 ms | 102× |
+| 384 × 384 | 744.48 ms | 3.858 ms | 193× |
 
 Not all language: the C++ port also added a closed set, so it expands 21,015
 nodes where Python expands 61,631 on the same map. Roughly 3× is algorithmic.
@@ -553,11 +590,13 @@ For the DWA rollout, on the same window:
 
 | Window | Trajectories | Python | C++ | Speedup |
 | --- | ---: | ---: | ---: | ---: |
-| accel-limited | 410 | 1.360 ms | **0.0895 ms** | 15× |
-| full velocity space | 2,626 | 7.607 ms | **0.5843 ms** | 13× |
+| accel-limited | 410 | 0.7495 ms | **0.0665 ms** | 11× |
+| full velocity space | 2,626 | 4.3812 ms | **0.4007 ms** | 11× |
 
 The gap shrinks with batch size, because numpy's fixed per-call overhead
-amortises away. It was 7× and 4× before the rollout loop was optimised, and
+amortises away. It read 15× and 13× on the machine before this one, on the
+same code: see the host note at the foot of this page. It was 7× and 4× before
+the rollout loop was optimised, and
 before `bench_dwa.cpp` was found to be a *third* copy of the loop still
 scoring the form the controller replaced — so that row had been comparing the
 Python controller's current scoring against the C++ controller's old one.
@@ -592,14 +631,30 @@ both report 410.
 | `nav2_maps.py`, `nav2_compare.py` | vs the Nav2 Smac Planner paper |
 | `bench_astar.*`, `bench_dwa.*` | Python vs C++ latency |
 
-Measured on an Intel Xeon @ 2.80 GHz, g++ 13.3 `-O2`, Python 3.11, numpy 2.4,
+Measured on an Intel Xeon @ 2.10 GHz, g++ 13.3 `-O2`, Python 3.11, numpy 2.4,
 except the two figures in **What each of them does**, which are python3.12 with
 numpy 1.26.4 because matplotlib here is built for 3.12.
 
-Absolute numbers move with hardware, and on this host they move without it:
-the same scripts against the same code measured 1.52 to 1.69 times faster
-earlier the same day, and every trail in the closed-loop figures came out
-identical to the centimetre across that change. The clock above moved too --
-it read 2.10 GHz until `/proc/cpuinfo` was checked against it rather than
-copied forward. So every table above is one sequential sweep rather than a
-best-of, and the ratios are the claim.
+**Read that clock as a label and not as a measurement.** Every table above was
+re-run when a container restart moved this session onto a different machine,
+and the new one reports 2.10 GHz where the old one reported 2.80 -- and runs
+these benchmarks about twice as quickly. A nominally slower CPU beating a
+faster one by that much says the number in `/proc/cpuinfo` is not what these
+timings depend on: it is a shared, virtualised host, and what varies is what
+else is on it.
+
+Which also retires the line this paragraph used to end on. It said the
+absolutes drift and "the ratios are the claim", and the second half is now
+measured to be only partly true. Across that one machine change, on identical
+work, this repo's per-trajectory cost fell 1.59 times, CppRobotics' did not
+move, goktug97's fell 1.47 and amslabtech's fell 1.90 -- so the ratio against
+one baseline held, and the ratios against the other two moved by about 40
+percent in opposite directions. **What survived both hosts unchanged** is
+everything that is not a clock: every trail in the closed-loop figures to the
+centimetre, every node-expansion count, every rollout point and obstacle check
+in the work table, and every finishing time in `sim/`, which are simulated
+seconds.
+
+So: every table above is one sequential sweep on one machine rather than a
+best-of, the order of the columns is the durable part, and a multiple quoted
+to three significant figures is a fact about one afternoon.
